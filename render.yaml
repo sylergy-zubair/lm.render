@@ -3,7 +3,7 @@ services:
   - type: web
     name: london-move-api
     runtime: node
-    repo: https://github.com/your-username/london-move.git  # Update this with your GitHub repo
+    repo: https://github.com/sylergy-zubair/lm.render.git
     branch: main
     rootDir: .
     buildCommand: bun install
