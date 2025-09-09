@@ -363,7 +363,7 @@ export class ResponsePrecomputeService {
 
       // 3. Get featured property IDs for detailed precomputation
       const featured = await this.getPrecomputed<PropertyListing[]>('properties/featured');
-      if (featured?.data) {
+      if (featured?.data && Array.isArray(featured.data)) {
         const featuredIds = featured.data.map(p => p.propref);
         await this.precomputePropertyDetails(featuredIds);
       }

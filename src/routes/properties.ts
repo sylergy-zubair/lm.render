@@ -495,7 +495,31 @@ app.get('/:id/media/:filename', async (c) => {
       });
     }
     
-    // If not found, return 404
+    // If not found, try to fetch directly from Rentman as fallback
+    try {
+      console.log(`[Properties] Fetching image directly from Rentman: ${propref}/${filename}`);
+      
+      // Direct fetch from Rentman without Sharp processing for now
+      const mediaResponse = await rentmanClient.getMediaByFilename(filename);
+      
+      if (mediaResponse.base64data) {
+        const responseTime = Date.now() - startTime;
+        
+        // Return the image data directly as binary (original format)
+        const imageBuffer = Buffer.from(mediaResponse.base64data, 'base64');
+        
+        c.header('X-Response-Time', `${responseTime}ms`);
+        c.header('X-Cache-Status', 'DIRECT');
+        c.header('Content-Type', 'image/jpeg'); // Rentman images are typically JPEG
+        c.header('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+        
+        return c.body(imageBuffer);
+      }
+    } catch (directError) {
+      console.warn(`[Properties] Direct fetch failed for ${filename}:`, directError);
+    }
+    
+    // If still not found, return 404
     return c.json({
       success: false,
       error: 'Image not found or not yet processed',

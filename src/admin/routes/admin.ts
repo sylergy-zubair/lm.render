@@ -14,10 +14,28 @@ app.get('/properties', async (c) => {
       limit: 1000, // Get more properties for admin view
     });
 
+    // Get detailed property info for first image
+    const propertiesWithImages = await Promise.all(
+      properties.slice(0, 50).map(async (property) => {
+        try {
+          const detail = await rentmanClient.getProperty(property.propref.toString());
+          return {
+            ...property,
+            thumbnail: detail.media?.photos?.[0] || null,
+          };
+        } catch (error) {
+          return {
+            ...property,
+            thumbnail: null,
+          };
+        }
+      })
+    );
+
     return c.json({
       success: true,
-      data: properties,
-      count: properties.length,
+      data: propertiesWithImages,
+      count: propertiesWithImages.length,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -30,16 +48,36 @@ app.get('/properties', async (c) => {
 });
 
 /**
- * GET /admin/api/featured - Get currently featured properties
+ * GET /admin/api/featured - Get currently featured properties (admin controlled)
  */
 app.get('/featured', async (c) => {
   try {
-    const featured = await rentmanClient.getFeaturedProperties();
+    // Get all properties and filter based on admin cache settings
+    const allProperties = await rentmanClient.getProperties({ limit: 1000 });
+    const featured = allProperties.filter(property => property.featured === true);
+    
+    // Get detailed info with thumbnails for featured properties
+    const featuredWithImages = await Promise.all(
+      featured.map(async (property) => {
+        try {
+          const detail = await rentmanClient.getProperty(property.propref.toString());
+          return {
+            ...property,
+            thumbnail: detail.media?.photos?.[0] || null,
+          };
+        } catch (error) {
+          return {
+            ...property,
+            thumbnail: null,
+          };
+        }
+      })
+    );
     
     return c.json({
       success: true,
-      data: featured,
-      count: featured.length,
+      data: featuredWithImages,
+      count: featuredWithImages.length,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -98,6 +136,48 @@ app.post('/cache/clear', async (c) => {
 });
 
 /**
+ * POST /admin/api/properties/:propref/featured - Toggle featured status
+ */
+app.post('/properties/:propref/featured', async (c) => {
+  try {
+    const propref = c.req.param('propref');
+    const body = await c.req.json();
+    const { featured } = body;
+    
+    if (typeof featured !== 'boolean') {
+      return c.json({
+        success: false,
+        error: 'Featured status must be boolean',
+      }, 400);
+    }
+    
+    // Store featured status in cache with long TTL
+    const cacheKey = `property:featured:${propref}`;
+    await cacheService.set(cacheKey, featured, 86400 * 30); // 30 days
+    
+    // Invalidate related caches
+    await cacheService.invalidatePattern('properties:*');
+    await cacheService.invalidatePattern('framer:featured*');
+    
+    return c.json({
+      success: true,
+      data: {
+        propref,
+        featured,
+        message: `Property ${propref} ${featured ? 'marked as featured' : 'unmarked as featured'}`,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Toggle featured error:', error);
+    return c.json({
+      success: false,
+      error: 'Failed to toggle featured status',
+    }, 500);
+  }
+});
+
+/**
  * POST /admin/api/cache/warm - Warm cache
  */
 app.post('/cache/warm', async (c) => {
@@ -126,9 +206,10 @@ app.post('/cache/warm', async (c) => {
  */
 app.get('/health', async (c) => {
   try {
-    const [rentmanHealth, cacheStats] = await Promise.all([
+    const [rentmanHealth, cacheStats, cacheHealth] = await Promise.all([
       rentmanClient.healthCheck(),
       cacheService.getStats(),
+      cacheService.healthCheck(),
     ]);
 
     return c.json({
@@ -136,7 +217,7 @@ app.get('/health', async (c) => {
       data: {
         rentman: rentmanHealth,
         cache: {
-          status: cacheStats.redis.status === 'connected' ? 'up' : 'down',
+          status: cacheHealth.overall.status === 'unhealthy' ? 'down' : 'up',
           hitRate: cacheStats.combined.overallHitRate,
           totalRequests: cacheStats.combined.totalRequests,
         },

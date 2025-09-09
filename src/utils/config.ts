@@ -105,7 +105,7 @@ function loadConfig(): AppConfig {
       },
       cache: {
         redis: {
-          url: process.env.UPSTASH_REDIS_URL,
+          url: process.env.REDIS_URL,
           token: process.env.UPSTASH_REDIS_TOKEN,
           password: process.env.REDIS_PASSWORD,
         },

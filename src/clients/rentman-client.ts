@@ -9,6 +9,7 @@ import type {
   RentmanApiError,
 } from '@/types/rentman';
 import { appConfig } from '@/utils/config';
+import { cacheService } from '@/cache/cache-service';
 
 export class RentmanApiError extends Error {
   constructor(
@@ -52,7 +53,7 @@ export class RentmanClient {
         return [];
       }
 
-      return data.map(property => this.transformToListing(property));
+      return await Promise.all(data.map(property => this.transformToListing(property)));
     } catch (error) {
       throw this.handleError(error, 'Failed to fetch properties');
     }
@@ -71,7 +72,7 @@ export class RentmanClient {
         throw new RentmanApiError(`Property ${propref} not found`, 404);
       }
 
-      return this.transformToDetail(data[0]);
+      return await this.transformToDetail(data[0]);
     } catch (error) {
       throw this.handleError(error, `Failed to fetch property ${propref}`);
     }
@@ -94,13 +95,14 @@ export class RentmanClient {
     try {
       const queryParams = this.buildQueryParams({ filename });
       const response = await this.makeRequest(`/propertymedia.php?${queryParams}`);
-      const data = await this.parseResponse<RentmanMediaResponse>(response);
+      const data = await this.parseResponse<RentmanMediaResponse[]>(response);
 
-      if (!data.base64data) {
+      // Rentman returns an array, get the first item
+      if (!Array.isArray(data) || data.length === 0 || !data[0].base64data) {
         throw new RentmanApiError(`Media ${filename} not found`, 404);
       }
 
-      return data;
+      return data[0];
     } catch (error) {
       throw this.handleError(error, `Failed to fetch media ${filename}`);
     }
@@ -256,7 +258,12 @@ export class RentmanClient {
   /**
    * Transform Rentman property to our PropertyListing format
    */
-  private transformToListing(property: RentmanProperty): PropertyListing {
+  private async transformToListing(property: RentmanProperty): Promise<PropertyListing> {
+    // Check admin-set featured status first, fallback to Rentman
+    const adminFeaturedKey = `property:featured:${property.propref}`;
+    const adminFeatured = await cacheService.get<boolean>(adminFeaturedKey);
+    const isFeatured = adminFeatured !== null ? adminFeatured : property.featured === '1';
+    
     return {
       propref: property.propref,
       displayaddress: property.displayaddress,
@@ -265,7 +272,7 @@ export class RentmanClient {
       baths: parseInt(property.baths) || 0,
       type: property.type,
       status: property.status,
-      featured: property.featured === '1',
+      featured: isFeatured,
       area: property.area,
       geolocation: this.parseGeolocation(property.geolocation),
       available: property.available,
@@ -276,8 +283,8 @@ export class RentmanClient {
   /**
    * Transform Rentman property to our PropertyDetail format
    */
-  private transformToDetail(property: RentmanProperty): PropertyDetail {
-    const listing = this.transformToListing(property);
+  private async transformToDetail(property: RentmanProperty): Promise<PropertyDetail> {
+    const listing = await this.transformToListing(property);
     
     return {
       ...listing,

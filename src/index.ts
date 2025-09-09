@@ -74,6 +74,11 @@ if (appConfig.logging.enableRequestLogging) {
   }));
 }
 
+// Root endpoint - redirect to API info
+app.get('/', (c) => {
+  return c.redirect('/api');
+});
+
 // Health check endpoint
 app.get('/health', (c) => {
   return c.json({

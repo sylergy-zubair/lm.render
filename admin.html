@@ -78,6 +78,11 @@
         let properties = [];
         let featured = [];
         let health = null;
+        
+        // Get API token for image requests
+        function getApiToken() {
+            return 'LRnFpm0C5d81s1S1PuCNfQuVj3wSGbWgd%2BZJwrmZE1bbo8mEdr9p4t%2FZ8jMoldu0PosD3sJbNDuHO7OwDn%2FvxPwQv73AEehgp8Hjb0%2FB%2BAPYpQt%2Bcc55bA2Z2ye1VwaqDCZnmcBqpd4%3D';
+        }
 
         // Tab switching
         document.addEventListener('DOMContentLoaded', function() {
@@ -150,6 +155,7 @@
                 <table class="min-w-full divide-y divide-gray-200">
                     <thead class="bg-gray-50">
                         <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Photo</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Property</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Beds/Baths</th>
@@ -161,6 +167,18 @@
                         ${properties.map(property => `
                             <tr class="hover:bg-gray-50">
                                 <td class="px-4 py-3">
+                                    <div class="w-16 h-12 rounded overflow-hidden bg-gray-100 flex items-center justify-center">
+                                        ${property.thumbnail ? 
+                                            `<img src="/api/properties/${property.propref}/media/${property.thumbnail}?format=webp&w=64" 
+                                                  class="w-full h-full object-cover" 
+                                                  alt="Property thumbnail"
+                                                  onerror="this.parentElement.innerHTML='<span class=\\'text-xs text-gray-400\\'>No Image</span>'"
+                                             />` 
+                                            : '<span class="text-xs text-gray-400">No Image</span>'
+                                        }
+                                    </div>
+                                </td>
+                                <td class="px-4 py-3">
                                     <div>
                                         <div class="font-medium text-gray-900">${property.displayaddress}</div>
                                         <div class="text-sm text-gray-500">${property.propref}</div>
@@ -170,9 +188,13 @@
                                 <td class="px-4 py-3 text-sm text-gray-900">${property.beds}bed / ${property.baths}bath</td>
                                 <td class="px-4 py-3 text-sm text-gray-900">${property.area || 'N/A'}</td>
                                 <td class="px-4 py-3">
-                                    <span class="px-2 py-1 text-xs rounded-full ${property.featured ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}">
-                                        ${property.featured ? 'Yes' : 'No'}
-                                    </span>
+                                    <button 
+                                        onclick="toggleFeatured(${property.propref}, ${!property.featured})"
+                                        class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium transition-colors duration-200 ${property.featured ? 'bg-blue-100 text-blue-800 hover:bg-blue-200' : 'bg-gray-100 text-gray-800 hover:bg-gray-200'}"
+                                    >
+                                        <span class="w-2 h-2 rounded-full mr-2 ${property.featured ? 'bg-blue-600' : 'bg-gray-400'}"></span>
+                                        ${property.featured ? 'Featured' : 'Not Featured'}
+                                    </button>
                                 </td>
                             </tr>
                         `).join('')}
@@ -193,13 +215,25 @@
             }
 
             const gridHtml = featured.map(property => `
-                <div class="bg-white rounded-lg shadow p-6">
-                    <h3 class="font-medium text-gray-900 mb-2">${property.displayaddress}</h3>
-                    <p class="text-lg font-bold text-blue-600 mb-2">${property.displayprice}</p>
-                    <div class="text-sm text-gray-600 space-y-1">
-                        <div>${property.beds} beds • ${property.baths} baths</div>
-                        <div>${property.area || 'N/A'}</div>
-                        <div class="text-xs text-gray-500 mt-2">${property.propref}</div>
+                <div class="bg-white rounded-lg shadow overflow-hidden">
+                    <div class="aspect-video bg-gray-100 flex items-center justify-center">
+                        ${property.thumbnail ? 
+                            `<img src="/api/properties/${property.propref}/media/${property.thumbnail}?format=webp" 
+                                  class="w-full h-full object-cover" 
+                                  alt="Property image"
+                                  onerror="this.parentElement.innerHTML='<span class=\\'text-gray-400\\'>No Image</span>'"
+                             />` 
+                            : '<span class="text-gray-400">No Image</span>'
+                        }
+                    </div>
+                    <div class="p-6">
+                        <h3 class="font-medium text-gray-900 mb-2">${property.displayaddress}</h3>
+                        <p class="text-lg font-bold text-blue-600 mb-2">${property.displayprice}</p>
+                        <div class="text-sm text-gray-600 space-y-1">
+                            <div>${property.beds} beds • ${property.baths} baths</div>
+                            <div>${property.area || 'N/A'}</div>
+                            <div class="text-xs text-gray-500 mt-2">${property.propref}</div>
+                        </div>
                     </div>
                 </div>
             `).join('');
@@ -300,6 +334,34 @@
                 }
             } catch (error) {
                 alert('Error warming cache');
+            }
+        }
+
+        async function toggleFeatured(propref, featured) {
+            try {
+                const response = await fetch(`/admin/api/properties/${propref}/featured`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ featured })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    // Reload data to refresh the display
+                    await loadData();
+                    // Show success message briefly
+                    const originalAlert = alert;
+                    setTimeout(() => {
+                        console.log(`Property ${propref} ${featured ? 'marked as featured' : 'unmarked as featured'}`);
+                    }, 100);
+                } else {
+                    alert('Failed to update featured status: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error toggling featured status:', error);
+                alert('Error updating featured status');
             }
         }
     </script>
