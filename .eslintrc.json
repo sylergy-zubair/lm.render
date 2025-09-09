@@ -1,0 +1,53 @@
+{
+  "root": true,
+  "parser": "@typescript-eslint/parser",
+  "plugins": ["@typescript-eslint"],
+  "extends": [
+    "eslint:recommended",
+    "@typescript-eslint/recommended",
+    "@typescript-eslint/recommended-requiring-type-checking"
+  ],
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module",
+    "project": "./tsconfig.json"
+  },
+  "rules": {
+    // TypeScript specific
+    "@typescript-eslint/no-unused-vars": "error",
+    "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/prefer-const": "error",
+    "@typescript-eslint/no-non-null-assertion": "warn",
+    
+    // General code quality
+    "no-console": "warn",
+    "prefer-const": "error",
+    "no-var": "error",
+    
+    // Import/export
+    "no-duplicate-imports": "error",
+    
+    // Performance considerations
+    "no-await-in-loop": "warn",
+    "no-return-await": "error",
+    
+    // Security
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    
+    // Code style (will be handled by Prettier mostly)
+    "semi": ["error", "always"],
+    "quotes": ["error", "single", { "avoidEscape": true }],
+    "comma-trailing": "off" // Let Prettier handle this
+  },
+  "env": {
+    "node": true,
+    "es2022": true
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    "dist/",
+    "build/",
+    "*.js"
+  ]
+}

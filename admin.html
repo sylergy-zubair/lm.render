@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>London Move Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+</head>
+<body>
+    <div id="root">
+        <div class="min-h-screen bg-gray-50">
+            <div class="bg-white shadow-sm border-b">
+                <div class="px-6 py-4">
+                    <h1 class="text-2xl font-bold text-gray-900">London Move Admin</h1>
+                </div>
+                <nav class="px-6">
+                    <div class="flex space-x-8">
+                        <button id="properties-tab" class="py-2 px-1 border-b-2 border-blue-500 font-medium text-sm text-blue-600">
+                            Properties (<span id="properties-count">0</span>)
+                        </button>
+                        <button id="featured-tab" class="py-2 px-1 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-700">
+                            Featured (<span id="featured-count">0</span>)
+                        </button>
+                        <button id="cache-tab" class="py-2 px-1 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-700">
+                            Cache
+                        </button>
+                        <button id="health-tab" class="py-2 px-1 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-700">
+                            Health
+                        </button>
+                    </div>
+                </nav>
+            </div>
+
+            <div class="px-6 py-8">
+                <div id="properties-content">
+                    <h2 class="text-lg font-medium mb-4">All Properties (<span id="properties-total">Loading...</span>)</h2>
+                    <div id="properties-table" class="bg-white shadow rounded-lg overflow-hidden">
+                        <div class="p-4 text-center">Loading properties...</div>
+                    </div>
+                </div>
+
+                <div id="featured-content" class="hidden">
+                    <h2 class="text-lg font-medium mb-4">Featured Properties (<span id="featured-total">Loading...</span>)</h2>
+                    <div id="featured-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div class="p-4 text-center">Loading featured properties...</div>
+                    </div>
+                </div>
+
+                <div id="cache-content" class="hidden space-y-6">
+                    <div class="flex space-x-4">
+                        <button id="clear-cache" class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700">
+                            Clear Cache
+                        </button>
+                        <button id="warm-cache" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                            Warm Cache
+                        </button>
+                    </div>
+                    
+                    <div id="cache-stats" class="bg-white rounded-lg shadow p-6">
+                        <h3 class="text-lg font-medium mb-4">Cache Statistics</h3>
+                        <div class="text-center">Loading cache statistics...</div>
+                    </div>
+                </div>
+
+                <div id="health-content" class="hidden">
+                    <div id="health-stats" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="text-center">Loading health information...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple vanilla JS admin panel
+        let properties = [];
+        let featured = [];
+        let health = null;
+
+        // Tab switching
+        document.addEventListener('DOMContentLoaded', function() {
+            const tabs = ['properties', 'featured', 'cache', 'health'];
+            
+            tabs.forEach(tab => {
+                document.getElementById(tab + '-tab').addEventListener('click', function() {
+                    // Update tab styles
+                    tabs.forEach(t => {
+                        const tabEl = document.getElementById(t + '-tab');
+                        const contentEl = document.getElementById(t + '-content');
+                        if (t === tab) {
+                            tabEl.className = 'py-2 px-1 border-b-2 border-blue-500 font-medium text-sm text-blue-600';
+                            contentEl.classList.remove('hidden');
+                        } else {
+                            tabEl.className = 'py-2 px-1 border-b-2 border-transparent font-medium text-sm text-gray-500 hover:text-gray-700';
+                            contentEl.classList.add('hidden');
+                        }
+                    });
+                });
+            });
+
+            // Load data
+            loadData();
+
+            // Cache button handlers
+            document.getElementById('clear-cache').addEventListener('click', clearCache);
+            document.getElementById('warm-cache').addEventListener('click', warmCache);
+        });
+
+        async function loadData() {
+            try {
+                // Load all data in parallel
+                const [propertiesRes, featuredRes, healthRes] = await Promise.all([
+                    fetch('/admin/api/properties'),
+                    fetch('/admin/api/featured'),
+                    fetch('/admin/api/health')
+                ]);
+
+                const [propertiesData, featuredData, healthData] = await Promise.all([
+                    propertiesRes.json(),
+                    featuredRes.json(),
+                    healthRes.json()
+                ]);
+
+                if (propertiesData.success) {
+                    properties = propertiesData.data;
+                    renderProperties();
+                }
+
+                if (featuredData.success) {
+                    featured = featuredData.data;
+                    renderFeatured();
+                }
+
+                if (healthData.success) {
+                    health = healthData.data;
+                    renderHealth();
+                }
+            } catch (error) {
+                console.error('Failed to load data:', error);
+            }
+        }
+
+        function renderProperties() {
+            document.getElementById('properties-count').textContent = properties.length;
+            document.getElementById('properties-total').textContent = properties.length;
+            
+            const tableHtml = `
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Property</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Beds/Baths</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Featured</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        ${properties.map(property => `
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-3">
+                                    <div>
+                                        <div class="font-medium text-gray-900">${property.displayaddress}</div>
+                                        <div class="text-sm text-gray-500">${property.propref}</div>
+                                    </div>
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-900">${property.displayprice}</td>
+                                <td class="px-4 py-3 text-sm text-gray-900">${property.beds}bed / ${property.baths}bath</td>
+                                <td class="px-4 py-3 text-sm text-gray-900">${property.area || 'N/A'}</td>
+                                <td class="px-4 py-3">
+                                    <span class="px-2 py-1 text-xs rounded-full ${property.featured ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}">
+                                        ${property.featured ? 'Yes' : 'No'}
+                                    </span>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+            
+            document.getElementById('properties-table').innerHTML = tableHtml;
+        }
+
+        function renderFeatured() {
+            document.getElementById('featured-count').textContent = featured.length;
+            document.getElementById('featured-total').textContent = featured.length;
+            
+            if (featured.length === 0) {
+                document.getElementById('featured-grid').innerHTML = '<div class="col-span-3 text-center text-gray-500">No featured properties found</div>';
+                return;
+            }
+
+            const gridHtml = featured.map(property => `
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="font-medium text-gray-900 mb-2">${property.displayaddress}</h3>
+                    <p class="text-lg font-bold text-blue-600 mb-2">${property.displayprice}</p>
+                    <div class="text-sm text-gray-600 space-y-1">
+                        <div>${property.beds} beds • ${property.baths} baths</div>
+                        <div>${property.area || 'N/A'}</div>
+                        <div class="text-xs text-gray-500 mt-2">${property.propref}</div>
+                    </div>
+                </div>
+            `).join('');
+            
+            document.getElementById('featured-grid').innerHTML = gridHtml;
+        }
+
+        function renderHealth() {
+            if (!health) return;
+
+            const statsHtml = `
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-medium mb-4">Rentman API</h3>
+                    <div class="space-y-2">
+                        <div class="inline-block px-2 py-1 rounded text-sm ${health.rentman.status === 'up' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                            ${health.rentman.status.toUpperCase()}
+                        </div>
+                        <div class="text-sm text-gray-600">
+                            Response Time: ${health.rentman.responseTime}ms
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-medium mb-4">Cache System</h3>
+                    <div class="space-y-2">
+                        <div class="inline-block px-2 py-1 rounded text-sm ${health.cache.status === 'up' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                            ${health.cache.status.toUpperCase()}
+                        </div>
+                        <div class="text-sm text-gray-600">
+                            Hit Rate: ${(health.cache.hitRate * 100).toFixed(1)}%
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-medium mb-4">Server</h3>
+                    <div class="space-y-2">
+                        <div class="inline-block px-2 py-1 rounded text-sm bg-green-100 text-green-800">
+                            ${health.server.status.toUpperCase()}
+                        </div>
+                        <div class="text-sm text-gray-600">
+                            Uptime: ${Math.floor(health.server.uptime / 3600)}h ${Math.floor((health.server.uptime % 3600) / 60)}m
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('health-stats').innerHTML = statsHtml;
+
+            // Update cache stats
+            const cacheStatsHtml = `
+                <h3 class="text-lg font-medium mb-4">Cache Statistics</h3>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="bg-gray-50 p-4 rounded">
+                        <div class="text-sm text-gray-500">Hit Rate</div>
+                        <div class="text-2xl font-bold">${(health.cache.hitRate * 100).toFixed(1)}%</div>
+                    </div>
+                    <div class="bg-gray-50 p-4 rounded">
+                        <div class="text-sm text-gray-500">Total Requests</div>
+                        <div class="text-2xl font-bold">${health.cache.totalRequests.toLocaleString()}</div>
+                    </div>
+                    <div class="bg-gray-50 p-4 rounded">
+                        <div class="text-sm text-gray-500">Cache Status</div>
+                        <div class="text-lg font-bold ${health.cache.status === 'up' ? 'text-green-600' : 'text-red-600'}">
+                            ${health.cache.status.toUpperCase()}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('cache-stats').innerHTML = cacheStatsHtml;
+        }
+
+        async function clearCache() {
+            try {
+                const response = await fetch('/admin/api/cache/clear', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Cache cleared successfully');
+                    loadData(); // Reload data
+                } else {
+                    alert('Failed to clear cache');
+                }
+            } catch (error) {
+                alert('Error clearing cache');
+            }
+        }
+
+        async function warmCache() {
+            try {
+                const response = await fetch('/admin/api/cache/warm', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Cache warming initiated');
+                } else {
+                    alert('Failed to warm cache');
+                }
+            } catch (error) {
+                alert('Error warming cache');
+            }
+        }
+    </script>
+</body>
+</html>

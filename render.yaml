@@ -1,0 +1,76 @@
+services:
+  # Main API Service (Free Tier)
+  - type: web
+    name: london-move-api
+    runtime: node
+    repo: https://github.com/your-username/london-move.git  # Update this with your GitHub repo
+    branch: main
+    rootDir: .
+    buildCommand: bun install
+    startCommand: bun run start
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: RENTMAN_BASE_URL
+        value: https://www.rentman.online
+      - key: API_BASE_URL
+        fromService:
+          type: web
+          name: london-move-api
+          property: host
+      - key: FRONTEND_URL
+        value: https://stupendous-share-046449.framer.app
+      - key: CORS_ORIGINS
+        value: https://stupendous-share-046449.framer.app,http://localhost:3000
+      - key: LOG_LEVEL
+        value: info
+      - key: ENABLE_REQUEST_LOGGING
+        value: true
+      - key: ENABLE_EDGE_CACHING
+        value: true
+      - key: ENABLE_IMAGE_PRECOMPUTATION
+        value: true
+      - key: ENABLE_PREDICTIVE_CACHING
+        value: true
+      - key: ENABLE_AUTO_OPTIMIZATION
+        value: true
+      - key: ENABLE_RESPONSE_PRECOMPUTATION
+        value: true
+      - key: CACHE_PREFIX
+        value: lm:
+      - key: MEMORY_CACHE_SIZE
+        value: 1000
+      - key: MEMORY_CACHE_TTL
+        value: 300000
+      - key: IMAGE_QUALITY_DEFAULT
+        value: 85
+      - key: IMAGE_MAX_WIDTH
+        value: 3840
+      - key: IMAGE_MAX_HEIGHT
+        value: 2160
+    # The following env vars need to be set in Render dashboard:
+    # RENTMAN_API_TOKEN (sensitive)
+    # UPSTASH_REDIS_URL (will be provided by Redis service)
+
+  # Redis Cache Service (Free 25MB)
+  - type: redis
+    name: london-move-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []  # Empty means allow from any IP (required for web service)
+
+# Build settings
+build:
+  - name: install-bun
+    command: curl -fsSL https://bun.sh/install | bash && echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+
+# Database migrations (if needed in future)
+# databases:
+#   - name: london-move-db
+#     databaseName: london_move
+#     user: london_move_user
+#     plan: free
