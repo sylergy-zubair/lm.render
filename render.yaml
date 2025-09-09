@@ -63,10 +63,8 @@ services:
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []  # Empty means allow from any IP (required for web service)
 
-# Build settings
-build:
-  - name: install-bun
-    command: curl -fsSL https://bun.sh/install | bash && echo 'export PATH="$HOME/.bun/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+# Note: Bun is automatically available in Render's Node.js runtime
+# Custom build hooks are not supported in Render blueprints
 
 # Database migrations (if needed in future)
 # databases:
