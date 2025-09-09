@@ -41,7 +41,7 @@ services:
       - key: ENABLE_RESPONSE_PRECOMPUTATION
         value: true
       - key: CACHE_PREFIX
-        value: lm:
+        value: "lm:"
       - key: MEMORY_CACHE_SIZE
         value: 1000
       - key: MEMORY_CACHE_TTL
