@@ -84,7 +84,7 @@ app.get('/properties', async (c) => {
     // Extract and sanitize query parameters for Framer
     const rob = c.req.query('rob') || 'rent';
     const beds = c.req.query('beds');
-    const limit = Math.min(parseInt(c.req.query('limit') || '25'), 50); // Max 50 for performance
+    const limit = Math.min(parseInt(c.req.query('limit') || '50'), 60); // Max 50 for performance
     const page = Math.max(parseInt(c.req.query('page') || '1'), 1);
     
     // Build cache-friendly endpoint key
