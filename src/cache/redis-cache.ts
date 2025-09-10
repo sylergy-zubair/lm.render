@@ -143,7 +143,8 @@ export class RedisCache {
       const results = await pipeline.exec();
       const dataMap = new Map<string, T>();
       
-      results?.forEach((result, index) => {
+      if (results) {
+        results.forEach((result, index) => {
         const [error, data] = result;
         if (!error && data) {
           try {
@@ -161,7 +162,8 @@ export class RedisCache {
         } else {
           this.missCount++;
         }
-      });
+        });
+      }
       
       this.recordResponseTime(Date.now() - startTime);
       return dataMap;
@@ -306,32 +308,29 @@ export class RedisCache {
   /**
    * Get Redis configuration
    */
-  private getRedisConfig(): RedisOptions {
+  private getRedisConfig(): RedisOptions | string {
+    // If we have a Redis URL, let ioredis parse it automatically
+    if (appConfig.cache.redis.url && (appConfig.cache.redis.url.startsWith('redis://') || appConfig.cache.redis.url.startsWith('rediss://'))) {
+      // Return URL string directly - ioredis will handle authentication and TLS
+      return appConfig.cache.redis.url;
+    }
+    
+    // Fallback to manual config for non-URL formats
     const config: RedisOptions = {
-      retryDelayOnFailover: 100,
-      maxRetriesPerRequest: 3,
+      host: appConfig.cache.redis.url || 'localhost',
+      port: 6379,
+      maxRetriesPerRequest: null,
       lazyConnect: true,
       keepAlive: 30000,
-      commandTimeout: 5000,
+      connectTimeout: 10000,
+      commandTimeout: 10000,
+      family: 4,
     };
-
-    // Handle different Redis configurations
-    if (appConfig.cache.redis.url.startsWith('redis://') || appConfig.cache.redis.url.startsWith('rediss://')) {
-      // URL-based configuration (Upstash, etc.)
-      config.host = new URL(appConfig.cache.redis.url).hostname;
-      config.port = parseInt(new URL(appConfig.cache.redis.url).port) || 6379;
-      config.password = appConfig.cache.redis.token || appConfig.cache.redis.password;
-      
-      if (appConfig.cache.redis.url.startsWith('rediss://')) {
-        config.tls = {};
-      }
-    } else {
-      // Direct host configuration
-      config.host = appConfig.cache.redis.url;
-      config.port = 6379;
+    
+    if (appConfig.cache.redis.password) {
       config.password = appConfig.cache.redis.password;
     }
-
+    
     return config;
   }
 
@@ -432,9 +431,12 @@ export class RedisCache {
   private async getConnectionCount(): Promise<number> {
     try {
       const info = await this.redis.info('clients');
-      const lines = info.split('\n');
-      const clientsLine = lines.find(line => line.startsWith('connected_clients:'));
-      return clientsLine ? parseInt(clientsLine.split(':')[1].trim()) : 0;
+      if (info) {
+        const lines = info.split('\n');
+        const clientsLine = lines.find(line => line.startsWith('connected_clients:'));
+        return clientsLine ? parseInt(clientsLine.split(':')[1].trim()) : 0;
+      }
+      return 0;
     } catch {
       return 0;
     }
