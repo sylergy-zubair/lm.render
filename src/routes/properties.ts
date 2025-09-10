@@ -5,6 +5,7 @@ import { cacheService } from '@/cache/cache-service';
 import { databaseService } from '@/services/database';
 import { imageProcessor } from '@/services/image-processor';
 import { imageStorage } from '@/services/image-storage';
+import { appConfig } from '@/utils/config';
 import type { ApiResponse, PaginationMeta } from '@/types/api';
 import type { PropertyListing, PropertyDetail, RentmanApiParams } from '@/types/rentman';
 
@@ -327,109 +328,96 @@ app.get('/:id', async (c) => {
 });
 
 /**
- * GET /api/properties/:id/media - Lightning-fast optimized property media
+ * GET /api/properties/:id/media - Fast property media list
  */
 app.get('/:id/media', async (c) => {
   const startTime = Date.now();
   
   try {
     const propref = c.req.param('id');
-    const format = c.req.query('format') as 'avif' | 'webp' | 'jpeg' | undefined;
-    const width = parseInt(c.req.query('width') || '800');
-    const quality = parseInt(c.req.query('quality') || '85');
+    const cacheKey = `media:list:${propref}`;
     
-    const cacheKey = `media:optimized:${propref}:${format || 'all'}:${width}:${quality}`;
+    // Try cache first for lightning-fast response
+    const cached = await cacheService.get<any>(cacheKey);
     
-    // Try SWR cache for lightning-fast response
-    const mediaData = await cacheService.getWithSWR(
-      cacheKey,
-      async () => {
-        // Get property details to extract media filenames
-        const property = await rentmanClient.getProperty(propref);
-        const mediaFiles = [
-          property.media.photos,
-          property.media.floorplan,
-          property.media.epc,
-          property.media.brochure,
-        ].flat().filter(Boolean);
-        
-        if (mediaFiles.length === 0) {
-          return { images: [], message: 'No media available for this property' };
-        }
+    if (cached) {
+      const responseTime = Date.now() - startTime;
+      
+      c.header('X-Response-Time', `${responseTime}ms`);
+      c.header('X-Cache-Status', 'HIT');
+      
+      const response: ApiResponse<typeof cached> = {
+        success: true,
+        data: cached,
+        meta: {
+          propref,
+          cache: cacheService.generateCacheMeta(cacheKey, true, 'memory'),
+          performance: {
+            responseTime,
+            cacheHit: true,
+            optimization: 'lightning',
+          },
+        },
+      };
+      
+      return c.json(response);
+    }
+    
+    // Cache miss - fetch from Rentman
+    const property = await rentmanClient.getProperty(propref);
+    const mediaFiles = [
+      ...(property.media.photos || []),
+      property.media.floorplan,
+      property.media.epc,
+      property.media.brochure,
+    ].filter(Boolean);
+    
+    if (mediaFiles.length === 0) {
+      const responseTime = Date.now() - startTime;
+      const emptyResult = { images: [], message: 'No media available for this property' };
+      
+      // Cache empty result for 5 minutes
+      await cacheService.set(cacheKey, emptyResult, 300);
+      
+      return c.json({
+        success: true,
+        data: emptyResult,
+        meta: {
+          propref,
+          performance: { responseTime, cacheHit: false },
+        },
+      });
+    }
 
-        // Process each media file with optimization
-        const optimizedImages = await Promise.allSettled(
-          mediaFiles.slice(0, 10).map(async (filename) => { // Limit to 10 images
-            try {
-              // Check if already optimized and cached
-              const existing = await imageStorage.getOptimizedImage(propref, filename);
-              if (existing) {
-                return imageStorage.generateResponsiveMetadata(existing, propref);
-              }
-
-              // Fetch from Rentman and process
-              const mediaResponse = await rentmanClient.getMediaByFilename(filename);
-              const optimized = await imageProcessor.processFromBase64(
-                mediaResponse.base64data,
-                filename,
-                {
-                  formats: format ? [format] : ['avif', 'webp', 'jpeg'],
-                  widths: [400, 800, 1200, 1600],
-                  quality: { avif: quality, webp: quality, jpeg: quality + 5 },
-                }
-              );
-
-              // Store for future instant access
-              await imageStorage.storeOptimizedImage(optimized, filename, propref);
-              
-              return imageStorage.generateResponsiveMetadata(optimized, propref);
-            } catch (error) {
-              console.warn(`[Properties] Failed to process ${filename}:`, error);
-              return null;
-            }
-          })
-        );
-
-        // Filter successful results
-        const successfulImages = optimizedImages
-          .filter((result): result is PromiseFulfilledResult<any> => 
-            result.status === 'fulfilled' && result.value !== null)
-          .map(result => result.value);
-
-        return {
-          images: successfulImages,
-          total: mediaFiles.length,
-          processed: successfulImages.length,
-          failed: mediaFiles.length - successfulImages.length,
-        };
-      },
-      { freshTTL: 3600, staleTTL: 7200 } // 1h fresh, 2h stale
-    );
+    // Generate simple media list with URLs (no processing)
+    const mediaList = {
+      images: mediaFiles.slice(0, 20).map((filename, index) => ({
+        filename,
+        url: `${appConfig.server.apiBaseUrl}/api/properties/${propref}/media/${filename}`,
+        thumbnail: index === 0, // First image is thumbnail
+      })),
+      total: mediaFiles.length,
+      processed: mediaFiles.length,
+    };
 
     const responseTime = Date.now() - startTime;
     
-    // Set CDN-friendly headers
-    const headers = imageStorage.getCDNHeaders();
-    Object.entries(headers).forEach(([key, value]) => {
-      c.header(key, value);
-    });
+    // Cache for 1 hour
+    await cacheService.set(cacheKey, mediaList, 3600);
     
     c.header('X-Response-Time', `${responseTime}ms`);
-    c.header('X-Optimization', 'lightning-media');
+    c.header('X-Cache-Status', 'MISS');
     
-    const response: ApiResponse<typeof mediaData> = {
+    const response: ApiResponse<typeof mediaList> = {
       success: true,
-      data: mediaData,
+      data: mediaList,
       meta: {
         propref,
-        format: format || 'all',
-        width,
-        quality,
-        cache: cacheService.generateCacheMeta(cacheKey, true, 'redis'),
+        cache: cacheService.generateCacheMeta(cacheKey, false, 'miss'),
         performance: {
           responseTime,
-          cacheHit: true,
-          optimization: 'lightning',
+          cacheHit: false,
+          optimization: 'fast',
         },
       },
     };
@@ -452,7 +440,7 @@ app.get('/:id/media', async (c) => {
 });
 
 /**
- * GET /api/properties/:id/media/:filename - Individual optimized image
+ * GET /api/properties/:id/media/:filename - Fast cached image delivery
  */
 app.get('/:id/media/:filename', async (c) => {
   const startTime = Date.now();
@@ -460,63 +448,48 @@ app.get('/:id/media/:filename', async (c) => {
   try {
     const propref = c.req.param('id');
     const filename = c.req.param('filename');
-    const format = c.req.query('format') as 'avif' | 'webp' | 'jpeg' || 'webp';
-    const width = parseInt(c.req.query('w') || '800');
+    const cacheKey = `image:${propref}:${filename}`;
     
-    // Try to get optimized image from storage
-    const variant = await imageStorage.getImageVariant(propref, filename, width, format);
+    // Try cache first (lightning-fast response)
+    const cached = await cacheService.get<{ buffer: Buffer; contentType: string }>(cacheKey);
     
-    if (variant) {
+    if (cached) {
       const responseTime = Date.now() - startTime;
       
-      // Set CDN headers for maximum caching
-      const headers = imageStorage.getCDNHeaders(variant);
-      Object.entries(headers).forEach(([key, value]) => {
-        c.header(key, value);
-      });
+      // Set caching headers
+      c.header('X-Response-Time', `${responseTime}ms`);
+      c.header('X-Cache-Status', 'HIT');
+      c.header('Content-Type', cached.contentType);
+      c.header('Cache-Control', 'public, max-age=86400'); // 24 hours
+      
+      return c.body(cached.buffer);
+    }
+    
+    // Cache miss - fetch from Rentman and cache
+    console.log(`[Properties] Fetching and caching image: ${propref}/${filename}`);
+    
+    const mediaResponse = await rentmanClient.getMediaByFilename(filename);
+    
+    if (mediaResponse.base64data) {
+      const responseTime = Date.now() - startTime;
+      const imageBuffer = Buffer.from(mediaResponse.base64data, 'base64');
+      const contentType = 'image/jpeg'; // Rentman images are typically JPEG
+      
+      // Cache for 24 hours (images rarely change)
+      await cacheService.set(cacheKey, { buffer: imageBuffer, contentType }, 86400);
       
       c.header('X-Response-Time', `${responseTime}ms`);
+      c.header('X-Cache-Status', 'MISS');
+      c.header('Content-Type', contentType);
+      c.header('Cache-Control', 'public, max-age=86400');
       
-      // Return direct image URL for CDN
-      return c.json({
-        success: true,
-        url: variant.url,
-        format: variant.format,
-        width: variant.width,
-        height: variant.height,
-        size: variant.size,
-        responseTime,
-      });
+      return c.body(imageBuffer);
     }
     
-    // If not found, try to fetch directly from Rentman as fallback
-    try {
-      console.log(`[Properties] Fetching image directly from Rentman: ${propref}/${filename}`);
-      
-      // Direct fetch from Rentman without Sharp processing for now
-      const mediaResponse = await rentmanClient.getMediaByFilename(filename);
-      
-      if (mediaResponse.base64data) {
-        const responseTime = Date.now() - startTime;
-        
-        // Return the image data directly as binary (original format)
-        const imageBuffer = Buffer.from(mediaResponse.base64data, 'base64');
-        
-        c.header('X-Response-Time', `${responseTime}ms`);
-        c.header('X-Cache-Status', 'DIRECT');
-        c.header('Content-Type', 'image/jpeg'); // Rentman images are typically JPEG
-        c.header('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
-        
-        return c.body(imageBuffer);
-      }
-    } catch (directError) {
-      console.warn(`[Properties] Direct fetch failed for ${filename}:`, directError);
-    }
-    
-    // If still not found, return 404
+    // Image not found
     return c.json({
       success: false,
-      error: 'Image not found or not yet processed',
+      error: 'Image not found',
       code: 'IMAGE_NOT_FOUND',
     }, 404);
     
@@ -524,7 +497,7 @@ app.get('/:id/media/:filename', async (c) => {
     const responseTime = Date.now() - startTime;
     c.header('X-Response-Time', `${responseTime}ms`);
     
-    console.error(`[Properties] Get individual media error:`, error);
+    console.error(`[Properties] Get image error:`, error);
     
     return c.json({
       success: false,

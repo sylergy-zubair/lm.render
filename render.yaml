@@ -46,6 +46,10 @@ services:
         value: 1000
       - key: MEMORY_CACHE_TTL
         value: 300000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: london-move-db
+          property: connectionString
       - key: IMAGE_QUALITY_DEFAULT
         value: 85
       - key: IMAGE_MAX_WIDTH
@@ -54,21 +58,17 @@ services:
         value: 2160
     # The following env vars need to be set in Render dashboard:
     # RENTMAN_API_TOKEN (sensitive)
-    # UPSTASH_REDIS_URL (will be provided by Redis service)
+    # DATABASE_URL (will be provided by PostgreSQL service)
 
-  # Redis Cache Service (Free 25MB)
-  - type: redis
-    name: london-move-redis
+  # PostgreSQL Database Service (Free 100MB)
+  - type: pserv
+    name: london-move-db
+    databaseName: london_move
+    user: london_move_user
     plan: free
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []  # Empty means allow from any IP (required for web service)
 
 # Note: Bun is automatically available in Render's Node.js runtime
 # Custom build hooks are not supported in Render blueprints
 
-# Database migrations (if needed in future)
-# databases:
-#   - name: london-move-db
-#     databaseName: london_move
-#     user: london_move_user
-#     plan: free
+# PostgreSQL database is configured above as a service
+# DATABASE_URL will be automatically provided by Render

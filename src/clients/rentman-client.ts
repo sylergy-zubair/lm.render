@@ -25,7 +25,7 @@ export class RentmanApiError extends Error {
 export class RentmanClient {
   private readonly baseUrl: string;
   private readonly apiToken: string;
-  private readonly requestTimeout: number = 10000; // 10 seconds
+  private readonly requestTimeout: number = 180000; // 3 minutes
 
   constructor() {
     this.baseUrl = appConfig.rentman.baseUrl;

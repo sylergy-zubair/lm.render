@@ -1,9 +1,9 @@
-import { sqliteTable, integer, text, real, index } from 'drizzle-orm/sqlite-core';
+import { pgTable, serial, text, integer, real, boolean, timestamp, index } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Properties table - main property listings
-export const properties = sqliteTable('properties', {
-  propref: integer('propref').primaryKey(),
+export const properties = pgTable('properties', {
+  propref: serial('propref').primaryKey(),
   displayAddress: text('display_address').notNull(),
   displayPrice: text('display_price').notNull(),
   beds: integer('beds'),
@@ -13,8 +13,8 @@ export const properties = sqliteTable('properties', {
   geolocationLat: real('geolocation_lat'),
   geolocationLng: real('geolocation_lng'),
   available: text('available'), // Date as ISO string
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  createdAt: timestamp('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => ({
   areaIdx: index('idx_properties_area').on(table.area),
   bedsIdx: index('idx_properties_beds').on(table.beds),
@@ -24,35 +24,35 @@ export const properties = sqliteTable('properties', {
 }));
 
 // Property details - full property data
-export const propertyDetails = sqliteTable('property_details', {
+export const propertyDetails = pgTable('property_details', {
   propref: integer('propref').primaryKey().references(() => properties.propref, { onDelete: 'cascade' }),
   description: text('description'),
   features: text('features'), // JSON string
   addressFull: text('address_full'), // JSON string
   media: text('media'), // JSON string
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  createdAt: timestamp('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
 // Featured properties - admin-controlled featured status
-export const featuredProperties = sqliteTable('featured_properties', {
+export const featuredProperties = pgTable('featured_properties', {
   propref: integer('propref').primaryKey().references(() => properties.propref, { onDelete: 'cascade' }),
-  featured: integer('featured', { mode: 'boolean' }).notNull().default(false),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  featured: boolean('featured').notNull().default(false),
+  createdAt: timestamp('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => ({
   featuredIdx: index('idx_featured_status').on(table.featured),
 }));
 
 // Sync metadata - track data freshness and sync status
-export const syncMetadata = sqliteTable('sync_metadata', {
+export const syncMetadata = pgTable('sync_metadata', {
   key: text('key').primaryKey(),
-  lastSync: text('last_sync'), // ISO timestamp
+  lastSync: timestamp('last_sync'),
   totalProperties: integer('total_properties'),
   status: text('status', { enum: ['syncing', 'completed', 'failed'] }).notNull().default('completed'),
   errorMessage: text('error_message'),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
-  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  createdAt: timestamp('created_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
+  updatedAt: timestamp('updated_at').default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
 // Types for TypeScript

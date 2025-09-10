@@ -110,6 +110,11 @@ app.get('/properties', async (c) => {
       c.header('X-Framer-Optimized', 'true');
       c.header('X-Cache-Status', 'PRECOMPUTED');
       
+      // For Framer component compatibility, return data array directly
+      if (precomputed.data.success && precomputed.data.data) {
+        return c.json(precomputed.data.data);
+      }
+      
       return c.json(precomputed.data, precomputed.statusCode);
     }
     
@@ -225,6 +230,133 @@ app.get('/property/:id', async (c) => {
       error: 'Failed to load property details',
       code: 'FRAMER_API_ERROR',
       timestamp: new Date().toISOString(),
+    }, 500);
+  }
+});
+
+/**
+ * GET /api/framer/images/:propref/thumbnail - Get property thumbnail
+ */
+app.get('/images/:propref/thumbnail', async (c) => {
+  const startTime = Date.now();
+  
+  try {
+    const propref = c.req.param('propref');
+    
+    // Get first image from precomputed property data
+    const endpoint = `properties/${propref}`;
+    const precomputed = await responsePrecomputer.getPrecomputed(endpoint);
+    
+    if (precomputed && precomputed.data.success && precomputed.data.data) {
+      const property = precomputed.data.data;
+      let imageUrl = null;
+      
+      // Try to get thumbnail from media data
+      if (property.details?.media) {
+        try {
+          const media = JSON.parse(property.details.media);
+          if (media.photos && media.photos.length > 0) {
+            imageUrl = `data:image/jpeg;base64,${media.photos[0]}`;
+          }
+        } catch (e) {
+          console.warn(`Failed to parse media for ${propref}:`, e);
+        }
+      }
+      
+      const responseTime = Date.now() - startTime;
+      c.header('X-Response-Time', `${responseTime}ms`);
+      c.header('X-Framer-Optimized', 'true');
+      
+      return c.json({
+        success: true,
+        imageUrl,
+        propref,
+        responseTime,
+      });
+    }
+    
+    return c.json({
+      success: false,
+      error: 'Property or thumbnail not found',
+      propref,
+    }, 404);
+    
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    c.header('X-Response-Time', `${responseTime}ms`);
+    
+    console.error('[Framer] Thumbnail error:', error);
+    
+    return c.json({
+      success: false,
+      error: 'Failed to load thumbnail',
+      propref: c.req.param('propref'),
+      responseTime,
+    }, 500);
+  }
+});
+
+/**
+ * GET /api/framer/images/:propref/all - Get all property media
+ */
+app.get('/images/:propref/all', async (c) => {
+  const startTime = Date.now();
+  
+  try {
+    const propref = c.req.param('propref');
+    
+    // Get property data with media
+    const endpoint = `properties/${propref}`;
+    const precomputed = await responsePrecomputer.getPrecomputed(endpoint);
+    
+    if (precomputed && precomputed.data.success && precomputed.data.data) {
+      const property = precomputed.data.data;
+      const mediaImages = [];
+      
+      // Parse media from property details
+      if (property.details?.media) {
+        try {
+          const media = JSON.parse(property.details.media);
+          if (media.photos && Array.isArray(media.photos)) {
+            media.photos.forEach((photo, index) => {
+              mediaImages.push({
+                propref,
+                filename: `photo${index + 1}.jpg`,
+                caption: `Property image ${index + 1}`,
+                base64data: photo,
+                imgorder: index.toString(),
+              });
+            });
+          }
+        } catch (e) {
+          console.warn(`Failed to parse media for ${propref}:`, e);
+        }
+      }
+      
+      const responseTime = Date.now() - startTime;
+      c.header('X-Response-Time', `${responseTime}ms`);
+      c.header('X-Framer-Optimized', 'true');
+      
+      return c.json(mediaImages);
+    }
+    
+    return c.json({
+      success: false,
+      error: 'Property not found',
+      propref,
+    }, 404);
+    
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    c.header('X-Response-Time', `${responseTime}ms`);
+    
+    console.error('[Framer] Media error:', error);
+    
+    return c.json({
+      success: false,
+      error: 'Failed to load property media',
+      propref: c.req.param('propref'),
+      responseTime,
     }, 500);
   }
 });

@@ -246,7 +246,7 @@ export class DatabaseService {
         geolocationLat: propertyData.geolocation?.[0] || null,
         geolocationLng: propertyData.geolocation?.[1] || null,
         available: propertyData.available,
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date()
       };
 
       // Upsert main property
@@ -269,7 +269,7 @@ export class DatabaseService {
           features: propertyData.features ? JSON.stringify(propertyData.features) : null,
           addressFull: propertyData.address ? JSON.stringify(propertyData.address) : null,
           media: propertyData.media ? JSON.stringify(propertyData.media) : null,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date()
         };
 
         await this.db()
@@ -319,12 +319,23 @@ export class DatabaseService {
     try {
       const propertyId = parseInt(propref);
       
+      // First check if the property exists in the properties table
+      const propertyExists = await this.db()
+        .select({ propref: schema.properties.propref })
+        .from(schema.properties)
+        .where(eq(schema.properties.propref, propertyId))
+        .limit(1);
+
+      if (propertyExists.length === 0) {
+        throw new Error(`Property with ID ${propertyId} does not exist in the properties table`);
+      }
+      
       await this.db()
         .insert(schema.featuredProperties)
         .values({
           propref: propertyId,
           featured,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date()
         })
         .onConflictDoUpdate({
           target: schema.featuredProperties.propref,
@@ -367,7 +378,7 @@ export class DatabaseService {
         .values({
           key,
           ...data,
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date()
         })
         .onConflictDoUpdate({
           target: schema.syncMetadata.key,

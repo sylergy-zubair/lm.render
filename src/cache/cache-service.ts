@@ -1,11 +1,9 @@
 import { memoryCache } from './memory-cache';
-import { redisCache } from './redis-cache';
 import type { CacheMeta } from '@/types/api';
 
 interface CacheOptions {
   ttl?: number;
   skipMemory?: boolean;
-  skipRedis?: boolean;
 }
 
 interface SWROptions {
@@ -19,16 +17,9 @@ interface CacheStats {
     hitRate: number;
     memoryUsage: number;
   };
-  redis: {
-    keyCount: number;
-    hitRate: number;
-    avgResponseTime: number;
-    status: 'up' | 'down';
-  };
   combined: {
     totalRequests: number;
     memoryHits: number;
-    redisHits: number;
     misses: number;
     overallHitRate: number;
   };
@@ -36,43 +27,26 @@ interface CacheStats {
 
 /**
  * Unified cache service implementing our lightning-fast caching strategy
- * Layer 1: Memory Cache (sub-millisecond access)
- * Layer 2: Redis Cache (single-digit millisecond access)
+ * Memory Cache only (sub-millisecond access)
  */
 export class CacheService {
   private readonly processingKeys = new Set<string>();
   private stats = {
     memoryHits: 0,
-    redisHits: 0,
     misses: 0,
   };
 
   /**
-   * Get value from cache with fallback strategy
+   * Get value from memory cache
    */
   async get<T>(key: string, options: CacheOptions = {}): Promise<T | null> {
     try {
-      // Layer 1: Memory Cache (fastest)
+      // Memory Cache only
       if (!options.skipMemory) {
         const memoryValue = memoryCache.get<T>(key);
         if (memoryValue !== null) {
           this.stats.memoryHits++;
           return memoryValue;
-        }
-      }
-
-      // Layer 2: Redis Cache
-      if (!options.skipRedis) {
-        const redisValue = await redisCache.get<T>(key);
-        if (redisValue !== null) {
-          this.stats.redisHits++;
-          
-          // Populate memory cache for next time
-          if (!options.skipMemory) {
-            memoryCache.set(key, redisValue, Math.min(options.ttl || 300, 300) * 1000);
-          }
-          
-          return redisValue;
         }
       }
 
@@ -86,24 +60,15 @@ export class CacheService {
   }
 
   /**
-   * Set value in both cache layers
+   * Set value in memory cache
    */
   async set<T>(key: string, value: T, ttl: number = 300, options: CacheOptions = {}): Promise<void> {
     try {
-      const promises: Promise<any>[] = [];
-
-      // Store in Redis
-      if (!options.skipRedis) {
-        promises.push(redisCache.set(key, value, ttl));
-      }
-
-      // Store in Memory (with shorter TTL)
+      // Store in Memory only
       if (!options.skipMemory) {
-        const memoryTTL = Math.min(ttl, 300) * 1000; // Max 5 minutes in memory
+        const memoryTTL = Math.min(ttl, 600) * 1000; // Max 10 minutes in memory
         memoryCache.set(key, value, memoryTTL);
       }
-
-      await Promise.all(promises);
     } catch (error) {
       console.error(`[CacheService] Set error for key ${key}:`, error);
       throw error;
@@ -111,16 +76,11 @@ export class CacheService {
   }
 
   /**
-   * Delete from both cache layers
+   * Delete from memory cache
    */
   async delete(key: string): Promise<boolean> {
     try {
-      const [memoryResult, redisResult] = await Promise.all([
-        Promise.resolve(memoryCache.delete(key)),
-        redisCache.delete(key),
-      ]);
-
-      return memoryResult || redisResult;
+      return memoryCache.delete(key);
     } catch (error) {
       console.error(`[CacheService] Delete error for key ${key}:`, error);
       return false;
@@ -128,17 +88,11 @@ export class CacheService {
   }
 
   /**
-   * Check if key exists in any cache layer
+   * Check if key exists in memory cache
    */
   async has(key: string): Promise<boolean> {
     try {
-      // Check memory first (faster)
-      if (memoryCache.has(key)) {
-        return true;
-      }
-
-      // Check Redis
-      return await redisCache.has(key);
+      return memoryCache.has(key);
     } catch (error) {
       console.error(`[CacheService] Has error for key ${key}:`, error);
       return false;
@@ -177,16 +131,11 @@ export class CacheService {
   }
 
   /**
-   * Invalidate keys matching pattern in both cache layers
+   * Invalidate keys matching pattern in memory cache
    */
   async invalidatePattern(pattern: string): Promise<number> {
     try {
-      const [memoryCount, redisCount] = await Promise.all([
-        Promise.resolve(memoryCache.invalidatePattern(pattern)),
-        redisCache.invalidatePattern(pattern),
-      ]);
-
-      return memoryCount + redisCount;
+      return memoryCache.invalidatePattern(pattern);
     } catch (error) {
       console.error(`[CacheService] Pattern invalidation error:`, error);
       return 0;
@@ -194,43 +143,19 @@ export class CacheService {
   }
 
   /**
-   * Get multiple keys efficiently
+   * Get multiple keys from memory cache
    */
   async getMultiple<T>(keys: string[]): Promise<Map<string, T>> {
     const results = new Map<string, T>();
-    const missingKeys: string[] = [];
 
-    // First, try to get all from memory
+    // Get all from memory cache
     for (const key of keys) {
       const value = memoryCache.get<T>(key);
       if (value !== null) {
         results.set(key, value);
         this.stats.memoryHits++;
       } else {
-        missingKeys.push(key);
-      }
-    }
-
-    // If we have missing keys, try Redis
-    if (missingKeys.length > 0) {
-      try {
-        const redisResults = await redisCache.getMultiple<T>(missingKeys);
-        
-        for (const [key, value] of redisResults) {
-          results.set(key, value);
-          this.stats.redisHits++;
-          
-          // Populate memory cache
-          memoryCache.set(key, value, 300000); // 5 minutes
-        }
-
-        // Count misses
-        const redisHitKeys = new Set(redisResults.keys());
-        const finalMisses = missingKeys.filter(key => !redisHitKeys.has(key));
-        this.stats.misses += finalMisses.length;
-      } catch (error) {
-        console.error('[CacheService] GetMultiple Redis error:', error);
-        this.stats.misses += missingKeys.length;
+        this.stats.misses++;
       }
     }
 
@@ -238,19 +163,16 @@ export class CacheService {
   }
 
   /**
-   * Set multiple keys efficiently
+   * Set multiple keys in memory cache
    */
   async setMultiple<T>(entries: Array<{ key: string; value: T; ttl?: number }>): Promise<void> {
     try {
-      // Set in memory immediately
+      // Set in memory only
       memoryCache.setMultiple(entries.map(e => ({
         key: e.key,
         value: e.value,
-        ttl: Math.min(e.ttl || 300, 300) * 1000,
+        ttl: Math.min(e.ttl || 300, 600) * 1000, // Max 10 minutes
       })));
-
-      // Set in Redis (background)
-      await redisCache.setMultiple(entries);
     } catch (error) {
       console.error('[CacheService] SetMultiple error:', error);
       throw error;
@@ -266,19 +188,15 @@ export class CacheService {
   }
 
   /**
-   * Get comprehensive cache statistics
+   * Get memory cache statistics
    */
   async getStats(): Promise<CacheStats> {
     try {
-      const [memoryStats, redisStats, redisHealth] = await Promise.all([
-        Promise.resolve(memoryCache.getStats()),
-        redisCache.getStats(),
-        redisCache.healthCheck(),
-      ]);
+      const memoryStats = memoryCache.getStats();
 
-      const totalRequests = this.stats.memoryHits + this.stats.redisHits + this.stats.misses;
+      const totalRequests = this.stats.memoryHits + this.stats.misses;
       const overallHitRate = totalRequests > 0 
-        ? (this.stats.memoryHits + this.stats.redisHits) / totalRequests 
+        ? this.stats.memoryHits / totalRequests 
         : 0;
 
       return {
@@ -287,16 +205,9 @@ export class CacheService {
           hitRate: memoryStats.hitRate,
           memoryUsage: memoryStats.totalMemoryUsage,
         },
-        redis: {
-          keyCount: redisStats.keyCount,
-          hitRate: redisStats.hitRate,
-          avgResponseTime: redisStats.avgResponseTime,
-          status: redisHealth.status,
-        },
         combined: {
           totalRequests,
           memoryHits: this.stats.memoryHits,
-          redisHits: this.stats.redisHits,
           misses: this.stats.misses,
           overallHitRate,
         },
@@ -308,54 +219,34 @@ export class CacheService {
   }
 
   /**
-   * Health check for cache systems
+   * Health check for memory cache
    */
   async healthCheck(): Promise<{
     memory: { status: 'up' | 'down'; entries: number };
-    redis: { status: 'up' | 'down'; responseTime: number };
-    overall: { status: 'healthy' | 'degraded' | 'unhealthy' };
+    overall: { status: 'healthy' | 'unhealthy' };
   }> {
     const memoryStats = memoryCache.getStats();
-    const redisHealth = await redisCache.healthCheck();
-
-    let overallStatus: 'healthy' | 'degraded' | 'unhealthy';
-    
-    if (redisHealth.status === 'up') {
-      overallStatus = 'healthy';
-    } else if (memoryStats.size > 0) {
-      overallStatus = 'degraded'; // Memory cache working, Redis down
-    } else {
-      overallStatus = 'unhealthy';
-    }
 
     return {
       memory: {
         status: 'up',
         entries: memoryStats.size,
       },
-      redis: {
-        status: redisHealth.status,
-        responseTime: redisHealth.responseTime,
-      },
       overall: {
-        status: overallStatus,
+        status: 'healthy',
       },
     };
   }
 
   /**
-   * Clear all caches
+   * Clear memory cache
    */
   async clear(): Promise<void> {
-    await Promise.all([
-      Promise.resolve(memoryCache.clear()),
-      redisCache.clear(),
-    ]);
+    memoryCache.clear();
 
     // Reset stats
     this.stats = {
       memoryHits: 0,
-      redisHits: 0,
       misses: 0,
     };
   }
@@ -367,7 +258,7 @@ export class CacheService {
     value: T;
     createdAt: number;
   } | null> {
-    // Try memory first
+    // Try memory cache
     const memoryValue = memoryCache.get<T>(key);
     if (memoryValue !== null) {
       // Memory cache doesn't store metadata, so estimate
@@ -375,22 +266,6 @@ export class CacheService {
         value: memoryValue,
         createdAt: Date.now() - 30000, // Assume 30 seconds old
       };
-    }
-
-    // Try Redis with metadata
-    try {
-      const fullKey = 'lm:' + key;
-      const data = await redisCache['redis'].get(fullKey);
-      
-      if (data) {
-        const parsed = JSON.parse(data);
-        return {
-          value: parsed.value,
-          createdAt: parsed.createdAt,
-        };
-      }
-    } catch (error) {
-      // Silent fail
     }
 
     return null;
@@ -447,7 +322,7 @@ export class CacheService {
   /**
    * Generate cache metadata
    */
-  generateCacheMeta(key: string, hit: boolean, level: 'memory' | 'redis' | 'miss'): CacheMeta {
+  generateCacheMeta(key: string, hit: boolean, level: 'memory' | 'miss'): CacheMeta {
     return {
       hit,
       ttl: 300, // Default TTL

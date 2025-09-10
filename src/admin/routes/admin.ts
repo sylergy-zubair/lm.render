@@ -3,6 +3,7 @@ import { rentmanClient } from '@/clients/rentman-client';
 import { cacheService } from '@/cache/cache-service';
 import { databaseService } from '@/services/database';
 import { responsePrecomputer } from '@/services/response-precomputer';
+import { syncService } from '@/services/sync-service';
 
 const app = new Hono();
 
@@ -178,6 +179,35 @@ app.post('/cache/warm', async (c) => {
     return c.json({
       success: false,
       error: 'Failed to initiate cache warming',
+    }, 500);
+  }
+});
+
+/**
+ * POST /admin/api/sync/force - Force immediate sync from Rentman
+ */
+app.post('/sync/force', async (c) => {
+  try {
+    console.log('[Admin] Force sync requested');
+    const result = await syncService.forceSyncNow();
+    
+    return c.json({
+      success: result.success,
+      data: {
+        propertiesSynced: result.propertiesSynced,
+        error: result.error,
+      },
+      message: result.success 
+        ? `Successfully synced ${result.propertiesSynced} properties`
+        : `Sync failed: ${result.error}`,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Admin force sync error:', error);
+    return c.json({
+      success: false,
+      error: 'Failed to initiate sync',
+      message: 'An error occurred while trying to sync',
     }, 500);
   }
 });

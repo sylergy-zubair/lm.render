@@ -60,7 +60,7 @@ export class SyncService {
       // Update sync metadata to 'syncing'
       await databaseService.updateSyncMetadata('properties_sync', {
         status: 'syncing',
-        lastSync: new Date().toISOString()
+        lastSync: new Date()
       });
 
       // Fetch all properties from Rentman
@@ -84,11 +84,14 @@ export class SyncService {
       console.log('[SyncService] Upserting properties to SQLite...');
       await databaseService.upsertProperties(propertiesWithDetails);
 
+      // Automatically set featured properties if none exist
+      await this.autoSetFeaturedProperties(propertiesWithDetails);
+
       // Update sync metadata
       const syncDuration = Date.now() - startTime;
       await databaseService.updateSyncMetadata('properties_sync', {
         status: 'completed',
-        lastSync: new Date().toISOString(),
+        lastSync: new Date(),
         totalProperties: properties.length,
         errorMessage: null
       });
@@ -245,6 +248,133 @@ export class SyncService {
       console.log('[SyncService] Invalidated related caches');
     } catch (error) {
       console.warn('[SyncService] Failed to invalidate caches:', error);
+    }
+  }
+
+  /**
+   * Automatically set featured properties if none exist
+   */
+  private async autoSetFeaturedProperties(properties: any[]): Promise<void> {
+    try {
+      // Check current featured properties count
+      const stats = await databaseService.getStats();
+      const currentFeatured = stats.featuredProperties;
+      
+      if (currentFeatured === 7) {
+        console.log(`[SyncService] Already have exactly 7 featured properties, skipping auto-selection`);
+        return;
+      }
+
+      if (currentFeatured > 7) {
+        console.log(`[SyncService] Found ${currentFeatured} featured properties (more than 7), will keep first 7`);
+        // TODO: Implement logic to keep only first 7 if needed
+        return;
+      }
+
+      console.log(`[SyncService] Found ${currentFeatured} featured properties, auto-selecting ${7 - currentFeatured} more to reach 7...`);
+
+      // Get currently featured properties to avoid duplicates
+      const currentlyFeaturedProps = await databaseService.getFeaturedProperties(20);
+      const currentlyFeaturedIds = new Set(currentlyFeaturedProps.map(p => parseInt(p.propref)));
+
+      // Auto-select featured properties based on criteria:
+      // 1. Not already featured
+      // 2. Recent properties preferred (by propref)
+      // 3. Try to prefer properties with images but don't require it
+      const allCandidates = properties
+        .filter(p => !currentlyFeaturedIds.has(parseInt(p.propref))) // Not already featured
+        .sort((a, b) => parseInt(b.propref) - parseInt(a.propref)); // Recent first
+
+      // Prefer properties with images, but fallback to any property
+      let featuredCandidates = allCandidates.filter(p => {
+        try {
+          return p.details?.media && 
+                 JSON.parse(p.details.media).photos && 
+                 JSON.parse(p.details.media).photos.length > 0;
+        } catch {
+          return false;
+        }
+      }).slice(0, 12);
+
+      const needed = 7 - currentFeatured;
+      
+      console.log(`[SyncService] Available properties: ${allCandidates.length}, with images: ${featuredCandidates.length}, needed: ${needed}`);
+
+      // If not enough candidates with images, include any available property
+      if (featuredCandidates.length < needed && allCandidates.length > 0) {
+        console.log(`[SyncService] Not enough properties with images (${featuredCandidates.length}), including properties without images`);
+        featuredCandidates = allCandidates.slice(0, Math.max(12, needed));
+      }
+
+      if (featuredCandidates.length === 0 || needed <= 0) {
+        console.log('[SyncService] No suitable additional properties found for featuring');
+        return;
+      }
+
+      // Select needed additional featured properties with diversity preference
+      const newFeatured = [];
+      const usedAreas = new Set();
+      const rentSaleCount = { rent: 0, sale: 0 };
+
+      // First pass: Try to get diverse properties
+      for (const property of featuredCandidates) {
+        if (newFeatured.length >= needed) break;
+
+        const area = property.area?.toLowerCase() || 'unknown';
+        const rentOrBuy = property.rentOrBuy || 'rent';
+
+        // Prefer diversity in areas and rent/sale mix
+        const areaUsed = usedAreas.has(area);
+        const typeBalance = rentSaleCount[rentOrBuy] < Math.ceil(needed / 2); // Balance types
+
+        if (!areaUsed || typeBalance || newFeatured.length < Math.min(3, needed)) {
+          newFeatured.push(property.propref);
+          usedAreas.add(area);
+          rentSaleCount[rentOrBuy]++;
+        }
+      }
+
+      // Second pass: Fill remaining slots if we don't have enough yet
+      if (newFeatured.length < needed) {
+        for (const property of featuredCandidates) {
+          if (newFeatured.length >= needed) break;
+          
+          if (!newFeatured.includes(property.propref)) {
+            newFeatured.push(property.propref);
+          }
+        }
+      }
+
+      // Fallback: If still not enough, take from all properties
+      if (newFeatured.length < needed) {
+        const remainingCandidates = properties
+          .filter(p => !currentlyFeaturedIds.has(parseInt(p.propref)))
+          .filter(p => !newFeatured.includes(p.propref))
+          .sort((a, b) => parseInt(b.propref) - parseInt(a.propref))
+          .slice(0, needed - newFeatured.length);
+        
+        newFeatured.push(...remainingCandidates.map(p => p.propref));
+      }
+
+      // Take only what we need
+      const finalNewFeatured = newFeatured.slice(0, needed);
+
+      if (finalNewFeatured.length === 0) {
+        console.log('[SyncService] No additional properties available for featuring');
+        return;
+      }
+
+      // Set new featured properties in database
+      for (const propref of finalNewFeatured) {
+        await databaseService.setFeaturedStatus(propref.toString(), true);
+      }
+
+      const totalFeatured = currentFeatured + finalNewFeatured.length;
+      console.log(`[SyncService] Auto-selected ${finalNewFeatured.length} additional featured properties: ${finalNewFeatured.join(', ')}`);
+      console.log(`[SyncService] Total featured properties now: ${totalFeatured}`);
+
+    } catch (error) {
+      console.error('[SyncService] Failed to auto-set featured properties:', error);
     }
   }
 

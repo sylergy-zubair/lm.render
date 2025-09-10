@@ -18,20 +18,19 @@ const RentmanConfigSchema = z.object({
 });
 
 const CacheConfigSchema = z.object({
-  redis: z.object({
-    url: z.string().default('redis://localhost:6379'),
-    token: z.string().optional(),
-    password: z.string().optional(),
-  }),
   memory: z.object({
     size: z.coerce.number().default(1000),
-    ttl: z.coerce.number().default(300000), // 5 minutes
+    ttl: z.coerce.number().default(600000), // 10 minutes (increased without Redis)
   }),
   prefix: z.string().default('lm:'),
 });
 
 const DatabaseConfigSchema = z.object({
-  url: z.string().min(1, 'Database URL is required'),
+  url: z.string().min(1, 'Database URL is required')
+    .refine(
+      url => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+      'DATABASE_URL must be a valid PostgreSQL connection string (postgresql:// or postgres://)'
+    ),
 });
 
 const CDNConfigSchema = z.object({
@@ -104,11 +103,6 @@ function loadConfig(): AppConfig {
         baseUrl: process.env.RENTMAN_BASE_URL,
       },
       cache: {
-        redis: {
-          url: process.env.REDIS_URL,
-          token: process.env.UPSTASH_REDIS_TOKEN,
-          password: process.env.REDIS_PASSWORD,
-        },
         memory: {
           size: process.env.MEMORY_CACHE_SIZE,
           ttl: process.env.MEMORY_CACHE_TTL,

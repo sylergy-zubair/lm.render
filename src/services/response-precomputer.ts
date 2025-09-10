@@ -348,6 +348,56 @@ export class ResponsePrecomputeService {
   }
 
   /**
+   * Preload popular images to prevent slow first requests
+   */
+  async preloadPopularImages(proprefs: string[], maxImagesPerProperty: number = 3): Promise<void> {
+    console.log(`[Precompute] Starting image preloading for ${proprefs.length} properties...`);
+    const startTime = Date.now();
+
+    const preloadPromises = proprefs.slice(0, 10).map(async (propref) => {
+      try {
+        // Get property details to find media files
+        const property = await rentmanClient.getProperty(propref);
+        const mediaFiles = [
+          ...(property.media.photos || []).slice(0, maxImagesPerProperty), // First few photos
+          property.media.floorplan,
+        ].filter(Boolean);
+
+        // Preload first few images for instant delivery
+        const imagePreloadPromises = mediaFiles.slice(0, maxImagesPerProperty).map(async (filename) => {
+          try {
+            const cacheKey = `image:${propref}:${filename}`;
+            
+            // Skip if already cached
+            const cached = await cacheService.get(cacheKey);
+            if (cached) return;
+
+            // Fetch and cache the image
+            const mediaResponse = await rentmanClient.getMediaByFilename(filename);
+            if (mediaResponse.base64data) {
+              const imageBuffer = Buffer.from(mediaResponse.base64data, 'base64');
+              const contentType = 'image/jpeg';
+              
+              await cacheService.set(cacheKey, { buffer: imageBuffer, contentType }, 86400);
+              console.log(`[Precompute] Cached image: ${propref}/${filename}`);
+            }
+          } catch (error) {
+            // Silent fail for individual images
+          }
+        });
+
+        await Promise.allSettled(imagePreloadPromises);
+      } catch (error) {
+        // Silent fail for individual properties
+      }
+    });
+
+    await Promise.allSettled(preloadPromises);
+    const totalTime = Date.now() - startTime;
+    console.log(`[Precompute] Image preloading completed in ${totalTime}ms`);
+  }
+
+  /**
    * Warm cache with popular/predicted content
    */
   async warmCache(): Promise<void> {
@@ -366,6 +416,9 @@ export class ResponsePrecomputeService {
       if (featured?.data && Array.isArray(featured.data)) {
         const featuredIds = featured.data.map(p => p.propref);
         await this.precomputePropertyDetails(featuredIds);
+
+        // 4. Preload popular images to eliminate slow first requests
+        await this.preloadPopularImages(featuredIds, 2);
       }
 
       const totalTime = Date.now() - startTime;
