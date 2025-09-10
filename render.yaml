@@ -60,15 +60,12 @@ services:
     # RENTMAN_API_TOKEN (sensitive)
     # DATABASE_URL (will be provided by PostgreSQL service)
 
-  # PostgreSQL Database Service (Free 100MB)
-  - type: pserv
-    name: london-move-db
-    databaseName: london_move
-    user: london_move_user
-    plan: free
-
 # Note: Bun is automatically available in Render's Node.js runtime
 # Custom build hooks are not supported in Render blueprints
 
-# PostgreSQL database is configured above as a service
-# DATABASE_URL will be automatically provided by Render
+# PostgreSQL Database Configuration
+databases:
+  - name: london-move-db
+    databaseName: london_move
+    user: london_move_user
+    plan: free
