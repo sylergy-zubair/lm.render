@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { rentmanClient } from '@/clients/rentman-client';
 import { cacheService } from '@/cache/cache-service';
+import { databaseService } from '@/services/database';
 import { imageProcessor } from '@/services/image-processor';
 import { imageStorage } from '@/services/image-storage';
 import type { ApiResponse, PaginationMeta } from '@/types/api';
@@ -136,31 +137,24 @@ app.get('/featured', async (c) => {
   const startTime = Date.now();
   
   try {
-    const cacheKey = 'properties:featured';
-    
-    // Try SWR cache for ultra-fast responses
-    const properties = await cacheService.getWithSWR(
-      cacheKey,
-      () => rentmanClient.getFeaturedProperties({ limit: 7 }),
-      { freshTTL: 600, staleTTL: 1800 } // 10min fresh, 30min stale
-    );
+    // Get featured properties directly from SQLite database
+    const properties = await databaseService.getFeaturedProperties(7);
     
     const responseTime = Date.now() - startTime;
     
     // Add performance headers
-    c.header('X-Cache-Status', 'SWR');
+    c.header('X-Cache-Status', 'DATABASE');
     c.header('X-Response-Time', `${responseTime}ms`);
-    c.header('X-Optimization', 'featured-lightning');
+    c.header('X-Optimization', 'sqlite-lightning');
     
     const response: ApiResponse<PropertyListing[]> = {
       success: true,
       data: properties,
       meta: {
-        cache: cacheService.generateCacheMeta(cacheKey, true, 'redis'),
+        source: 'database',
         performance: {
           responseTime,
-          cacheHit: true,
-          optimization: 'lightning',
+          optimization: 'sqlite-direct',
         },
       },
     };

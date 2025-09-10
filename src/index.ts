@@ -12,6 +12,8 @@ import propertiesRoute from '@/routes/properties';
 import framerRoute from '@/routes/framer';
 import adminRoute from '@/admin/routes/admin';
 import { responsePrecomputer } from '@/services/response-precomputer';
+import { databaseClient } from '@/db/client';
+import { syncService } from '@/services/sync-service';
 
 // Initialize logger
 const log = pino({
@@ -189,9 +191,17 @@ serve({
   log.info(`🔧 API info: ${appConfig.server.apiBaseUrl}/api`);
   log.info(`⚡ Framer endpoints: ${appConfig.server.apiBaseUrl}/api/framer/*`);
   
-  // Start background cache warming for lightning-fast responses
+  // Initialize database and sync service
   setTimeout(async () => {
     try {
+      log.info('🗄️ Initializing SQLite database...');
+      await databaseClient.initialize();
+      log.info('✅ Database initialized successfully');
+
+      log.info('🔄 Starting background sync service...');
+      await syncService.start();
+      log.info('✅ Sync service started - properties will sync hourly');
+
       log.info('🔥 Starting intelligent cache warming...');
       await responsePrecomputer.warmCache();
       log.info('✅ Cache warming completed - Framer site ready for lightning speed!');

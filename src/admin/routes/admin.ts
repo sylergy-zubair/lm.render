@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { rentmanClient } from '@/clients/rentman-client';
 import { cacheService } from '@/cache/cache-service';
+import { databaseService } from '@/services/database';
 import { responsePrecomputer } from '@/services/response-precomputer';
 
 const app = new Hono();
@@ -52,27 +53,8 @@ app.get('/properties', async (c) => {
  */
 app.get('/featured', async (c) => {
   try {
-    // Get all properties and filter based on admin cache settings
-    const allProperties = await rentmanClient.getProperties({ limit: 1000 });
-    const featured = allProperties.filter(property => property.featured === true);
-    
-    // Get detailed info with thumbnails for featured properties
-    const featuredWithImages = await Promise.all(
-      featured.map(async (property) => {
-        try {
-          const detail = await rentmanClient.getProperty(property.propref.toString());
-          return {
-            ...property,
-            thumbnail: detail.media?.photos?.[0] || null,
-          };
-        } catch (error) {
-          return {
-            ...property,
-            thumbnail: null,
-          };
-        }
-      })
-    );
+    // Get featured properties directly from database (super fast!)
+    const featuredWithImages = await databaseService.getFeaturedProperties(50);
     
     return c.json({
       success: true,
@@ -151,9 +133,8 @@ app.post('/properties/:propref/featured', async (c) => {
       }, 400);
     }
     
-    // Store featured status in cache with long TTL
-    const cacheKey = `property:featured:${propref}`;
-    await cacheService.set(cacheKey, featured, 86400 * 30); // 30 days
+    // Store featured status in database (permanent storage)
+    await databaseService.setFeaturedStatus(propref, featured);
     
     // Invalidate related caches
     await cacheService.invalidatePattern('properties:*');
