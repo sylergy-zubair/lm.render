@@ -2,6 +2,7 @@ import { database } from '@/db/client';
 import * as schema from '@/db/schema';
 import { eq, and, sql, desc, asc, like, inArray } from 'drizzle-orm';
 import type { PropertyListing, PropertyWithDetails, NewProperty, NewPropertyDetail } from '@/db/schema';
+import { imageResolver } from './image-resolver';
 
 export class DatabaseService {
   private db = database;
@@ -86,7 +87,7 @@ export class DatabaseService {
 
       const properties = await propertiesQuery;
 
-      // Add thumbnail from media data
+      // Add optimized thumbnail from image resolver
       const propertiesWithThumbs = await Promise.all(
         properties.map(async (property) => {
           const details = await this.db()
@@ -97,12 +98,11 @@ export class DatabaseService {
 
           let thumbnail = null;
           if (details[0]?.media) {
-            try {
-              const media = JSON.parse(details[0].media);
-              thumbnail = media.photos?.[0] || null;
-            } catch (e) {
-              // Handle JSON parse error silently
-            }
+            // Use image resolver to get optimized thumbnail
+            thumbnail = await imageResolver.getThumbnail(
+              property.propref.toString(),
+              details[0].media
+            );
           }
 
           return {
@@ -151,7 +151,7 @@ export class DatabaseService {
         .orderBy(desc(schema.properties.propref))
         .limit(limit);
 
-      // Add thumbnails
+      // Add optimized thumbnails
       const propertiesWithThumbs = await Promise.all(
         featuredProps.map(async (property) => {
           const details = await this.db()
@@ -162,12 +162,11 @@ export class DatabaseService {
 
           let thumbnail = null;
           if (details[0]?.media) {
-            try {
-              const media = JSON.parse(details[0].media);
-              thumbnail = media.photos?.[0] || null;
-            } catch (e) {
-              // Handle JSON parse error silently
-            }
+            // Use image resolver to get optimized thumbnail
+            thumbnail = await imageResolver.getThumbnail(
+              property.propref.toString(),
+              details[0].media
+            );
           }
 
           return {
@@ -390,6 +389,33 @@ export class DatabaseService {
     } catch (error) {
       console.error('[DatabaseService] Error updating sync metadata:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Pre-process images for better performance
+   */
+  async preProcessImages(limit = 50): Promise<void> {
+    try {
+      const properties = await this.db()
+        .select({
+          propref: schema.properties.propref,
+          media: schema.propertyDetails.media
+        })
+        .from(schema.properties)
+        .leftJoin(schema.propertyDetails, eq(schema.properties.propref, schema.propertyDetails.propref))
+        .where(sql`${schema.propertyDetails.media} IS NOT NULL`)
+        .limit(limit);
+
+      const propertiesToProcess = properties.map(p => ({
+        propref: p.propref.toString(),
+        media: p.media || undefined
+      }));
+
+      console.log(`[DatabaseService] Pre-processing images for ${propertiesToProcess.length} properties`);
+      await imageResolver.preProcessPropertyImages(propertiesToProcess);
+    } catch (error) {
+      console.error('[DatabaseService] Error pre-processing images:', error);
     }
   }
 

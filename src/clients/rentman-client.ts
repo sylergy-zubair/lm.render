@@ -1,12 +1,9 @@
-import { z } from 'zod';
 import type {
   RentmanProperty,
-  RentmanApiResponse,
   RentmanMediaResponse,
   RentmanApiParams,
   PropertyListing,
   PropertyDetail,
-  RentmanApiError,
 } from '@/types/rentman';
 import { appConfig } from '@/utils/config';
 import { cacheService } from '@/cache/cache-service';
@@ -15,7 +12,8 @@ export class RentmanApiError extends Error {
   constructor(
     message: string,
     public code: number,
-    public details?: any
+    public details?: any,
+    public error?: any
   ) {
     super(message);
     this.name = 'RentmanApiError';
@@ -72,7 +70,7 @@ export class RentmanClient {
         throw new RentmanApiError(`Property ${propref} not found`, 404);
       }
 
-      return await this.transformToDetail(data[0]);
+      return await this.transformToDetail(data[0]!);
     } catch (error) {
       throw this.handleError(error, `Failed to fetch property ${propref}`);
     }
@@ -98,11 +96,11 @@ export class RentmanClient {
       const data = await this.parseResponse<RentmanMediaResponse[]>(response);
 
       // Rentman returns an array, get the first item
-      if (!Array.isArray(data) || data.length === 0 || !data[0].base64data) {
+      if (!Array.isArray(data) || data.length === 0 || !data[0]?.base64data) {
         throw new RentmanApiError(`Media ${filename} not found`, 404);
       }
 
-      return data[0];
+      return data[0]!
     } catch (error) {
       throw this.handleError(error, `Failed to fetch media ${filename}`);
     }
@@ -274,7 +272,7 @@ export class RentmanClient {
       status: property.status,
       featured: isFeatured,
       area: property.area,
-      geolocation: this.parseGeolocation(property.geolocation),
+      geolocation: this.parseGeolocation(property.geolocation) || [0, 0],
       available: property.available,
       rentorbuy: this.parseRentOrBuy(property.rentorbuy),
     };
@@ -330,10 +328,10 @@ export class RentmanClient {
           property.photo7,
           property.photo8,
           property.photo9,
-        ].filter(Boolean),
-        floorplan: property.floorplan,
-        epc: property.epc,
-        brochure: property.brochure,
+        ].filter((photo): photo is string => Boolean(photo)),
+        ...(property.floorplan && { floorplan: property.floorplan }),
+        ...(property.epc && { epc: property.epc }),
+        ...(property.brochure && { brochure: property.brochure }),
       },
       contact: {
         negotiator: property.negotiator,
@@ -363,8 +361,8 @@ export class RentmanClient {
       return undefined;
     }
     
-    const lat = parseFloat(parts[0].trim());
-    const lng = parseFloat(parts[1].trim());
+    const lat = parseFloat(parts[0]?.trim() || '');
+    const lng = parseFloat(parts[1]?.trim() || '');
     
     if (isNaN(lat) || isNaN(lng)) {
       return undefined;

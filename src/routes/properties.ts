@@ -5,6 +5,7 @@ import { cacheService } from '@/cache/cache-service';
 import { databaseService } from '@/services/database';
 import { imageProcessor } from '@/services/image-processor';
 import { imageStorage } from '@/services/image-storage';
+import { imageResolver } from '@/services/image-resolver';
 import { appConfig } from '@/utils/config';
 import type { ApiResponse, PaginationMeta } from '@/types/api';
 import type { PropertyListing, PropertyDetail, RentmanApiParams } from '@/types/rentman';
@@ -266,37 +267,101 @@ app.get('/search', async (c) => {
 });
 
 /**
- * GET /api/properties/:id - Property details with caching
+ * GET /api/properties/:id - Property details with optimized images
  */
 app.get('/:id', async (c) => {
   const startTime = Date.now();
   
   try {
     const propref = c.req.param('id');
-    const cacheKey = `property:${propref}`;
+    const cacheKey = `property:enhanced:${propref}`;
     
-    // Try SWR cache for property details
-    const property = await cacheService.getWithSWR(
-      cacheKey,
-      () => rentmanClient.getProperty(propref),
-      { freshTTL: 1800, staleTTL: 3600 } // 30min fresh, 60min stale
-    );
+    // Check cache for enhanced property with image data
+    const cached = await cacheService.get<PropertyDetail & { images?: any }>(cacheKey);
+    
+    if (cached) {
+      const responseTime = Date.now() - startTime;
+      
+      c.header('X-Cache-Status', 'HIT');
+      c.header('X-Response-Time', `${responseTime}ms`);
+      
+      const response: ApiResponse<PropertyDetail & { images?: any }> = {
+        success: true,
+        data: cached,
+        meta: {
+          cache: cacheService.generateCacheMeta(cacheKey, true, 'memory'),
+          performance: {
+            responseTime,
+            cacheHit: true,
+            optimization: 'lightning',
+          },
+        },
+      };
+      
+      return c.json(response);
+    }
+    
+    // Fetch property details
+    const property = await rentmanClient.getProperty(propref);
+    
+    // Enhance with optimized image metadata
+    let enhancedProperty = { ...property };
+    
+    if (property.media && (property.media.photos?.length > 0 || property.media.floorplan || property.media.epc)) {
+      try {
+        const mediaJson = JSON.stringify(property.media);
+        const resolvedImages = await imageResolver.resolvePropertyImages(propref, mediaJson);
+        
+        enhancedProperty.images = {
+          photos: resolvedImages.photos.map(photo => ({
+            filename: photo.filename,
+            thumbnail: photo.thumbnailUrl,
+            responsive: photo.responsiveMetadata,
+            optimized: !!photo.optimized
+          })),
+          thumbnail: resolvedImages.thumbnail ? {
+            url: resolvedImages.thumbnail.thumbnailUrl,
+            responsive: resolvedImages.thumbnail.responsiveMetadata
+          } : undefined,
+          floorplan: resolvedImages.floorplan ? {
+            filename: resolvedImages.floorplan.filename,
+            thumbnail: resolvedImages.floorplan.thumbnailUrl,
+            optimized: !!resolvedImages.floorplan.optimized
+          } : undefined,
+          epc: resolvedImages.epc ? {
+            filename: resolvedImages.epc.filename,
+            thumbnail: resolvedImages.epc.thumbnailUrl,
+            optimized: !!resolvedImages.epc.optimized
+          } : undefined,
+        };
+      } catch (error) {
+        console.warn(`[Properties] Failed to enhance images for property ${propref}:`, error);
+      }
+    }
+    
+    // Cache enhanced property for 30 minutes
+    await cacheService.set(cacheKey, enhancedProperty, 1800);
     
     const responseTime = Date.now() - startTime;
     
-    c.header('X-Cache-Status', 'SWR');
+    c.header('X-Cache-Status', 'ENHANCED');
     c.header('X-Response-Time', `${responseTime}ms`);
     
-    const response: ApiResponse<PropertyDetail> = {
+    const response: ApiResponse<PropertyDetail & { images?: any }> = {
       success: true,
-      data: property,
+      data: enhancedProperty,
       meta: {
-        cache: cacheService.generateCacheMeta(cacheKey, true, 'redis'),
+        cache: cacheService.generateCacheMeta(cacheKey, false, 'enhanced'),
         performance: {
           responseTime,
-          cacheHit: true,
-          optimization: 'lightning',
+          cacheHit: false,
+          optimization: 'image-enhanced',
         },
+        images: enhancedProperty.images ? {
+          totalPhotos: enhancedProperty.images.photos?.length || 0,
+          optimizedCount: enhancedProperty.images.photos?.filter((p: any) => p.optimized).length || 0,
+          hasResponsive: !!enhancedProperty.images.thumbnail?.responsive
+        } : undefined
       },
     };
     
@@ -440,7 +505,7 @@ app.get('/:id/media', async (c) => {
 });
 
 /**
- * GET /api/properties/:id/media/:filename - Fast cached image delivery
+ * GET /api/properties/:id/media/:filename - Optimized image delivery with format negotiation
  */
 app.get('/:id/media/:filename', async (c) => {
   const startTime = Date.now();
@@ -448,9 +513,63 @@ app.get('/:id/media/:filename', async (c) => {
   try {
     const propref = c.req.param('id');
     const filename = c.req.param('filename');
-    const cacheKey = `image:${propref}:${filename}`;
     
-    // Try cache first (lightning-fast response)
+    // Parse query parameters for format/size preferences
+    const width = parseInt(c.req.query('w') || '800');
+    const format = (c.req.query('format') as 'avif' | 'webp' | 'jpeg') || 'jpeg';
+    
+    // Content negotiation based on Accept header
+    const acceptHeader = c.req.header('Accept') || '';
+    let preferredFormat = format;
+    
+    if (acceptHeader.includes('image/avif')) {
+      preferredFormat = 'avif';
+    } else if (acceptHeader.includes('image/webp')) {
+      preferredFormat = 'webp';
+    }
+    
+    // Try to get optimized variant
+    const variant = await imageStorage.getImageVariant(propref, filename, width, preferredFormat);
+    
+    if (variant) {
+      const responseTime = Date.now() - startTime;
+      
+      // Serve optimized variant (this would typically be served from file system or CDN)
+      const headers = imageStorage.getCDNHeaders(variant);
+      
+      // Add performance headers
+      headers['X-Response-Time'] = `${responseTime}ms`;
+      headers['X-Image-Optimized'] = 'true';
+      headers['X-Original-Format'] = format;
+      headers['X-Served-Format'] = preferredFormat;
+      
+      Object.entries(headers).forEach(([key, value]) => c.header(key, value));
+      
+      // For now, fall back to original image since we don't have file serving implemented
+      // In production, this would serve the actual optimized file
+      return c.json({
+        success: true,
+        message: 'Optimized variant available',
+        data: {
+          variant,
+          url: variant.url,
+          metadata: {
+            width: variant.width,
+            height: variant.height,
+            format: variant.format,
+            size: variant.size,
+            quality: variant.quality
+          }
+        },
+        meta: {
+          performance: { responseTime },
+          optimization: 'variant-served'
+        }
+      });
+    }
+    
+    // Fallback to original image processing
+    const cacheKey = `image:original:${propref}:${filename}`;
     const cached = await cacheService.get<{ buffer: Buffer; contentType: string }>(cacheKey);
     
     if (cached) {
@@ -459,27 +578,35 @@ app.get('/:id/media/:filename', async (c) => {
       // Set caching headers
       c.header('X-Response-Time', `${responseTime}ms`);
       c.header('X-Cache-Status', 'HIT');
+      c.header('X-Image-Optimized', 'false');
       c.header('Content-Type', cached.contentType);
       c.header('Cache-Control', 'public, max-age=86400'); // 24 hours
       
       return c.body(cached.buffer);
     }
     
-    // Cache miss - fetch from Rentman and cache
-    console.log(`[Properties] Fetching and caching image: ${propref}/${filename}`);
+    // Cache miss - fetch from Rentman and potentially optimize
+    console.log(`[Properties] Fetching image: ${propref}/${filename}`);
     
     const mediaResponse = await rentmanClient.getMediaByFilename(filename);
     
     if (mediaResponse.base64data) {
       const responseTime = Date.now() - startTime;
       const imageBuffer = Buffer.from(mediaResponse.base64data, 'base64');
+      
+      // Trigger background optimization (don't wait for it)
+      imageProcessor.processFromBase64(mediaResponse.base64data, filename)
+        .then(optimized => imageStorage.storeOptimizedImage(optimized, filename, propref))
+        .catch(error => console.warn(`[Properties] Background optimization failed for ${filename}:`, error));
+      
       const contentType = 'image/jpeg'; // Rentman images are typically JPEG
       
-      // Cache for 24 hours (images rarely change)
+      // Cache original for 24 hours
       await cacheService.set(cacheKey, { buffer: imageBuffer, contentType }, 86400);
       
       c.header('X-Response-Time', `${responseTime}ms`);
       c.header('X-Cache-Status', 'MISS');
+      c.header('X-Image-Optimized', 'background-processing');
       c.header('Content-Type', contentType);
       c.header('Cache-Control', 'public, max-age=86400');
       
@@ -503,6 +630,113 @@ app.get('/:id/media/:filename', async (c) => {
       success: false,
       error: 'Failed to fetch image',
       code: 'IMAGE_FETCH_ERROR',
+      timestamp: new Date().toISOString(),
+    }, 500);
+  }
+});
+
+/**
+ * GET /api/properties/:id/responsive-images - Get responsive image metadata for property
+ */
+app.get('/:id/responsive-images', async (c) => {
+  const startTime = Date.now();
+  
+  try {
+    const propref = c.req.param('id');
+    const cacheKey = `responsive-images:${propref}`;
+    
+    // Check cache first
+    const cached = await cacheService.get<any>(cacheKey);
+    
+    if (cached) {
+      const responseTime = Date.now() - startTime;
+      
+      c.header('X-Cache-Status', 'HIT');
+      c.header('X-Response-Time', `${responseTime}ms`);
+      
+      return c.json({
+        success: true,
+        data: cached,
+        meta: {
+          propref,
+          performance: { responseTime, cacheHit: true }
+        }
+      });
+    }
+    
+    // Get property from database to access media
+    const property = await databaseService.getProperty(propref);
+    
+    if (!property?.details?.media) {
+      return c.json({
+        success: true,
+        data: { images: [], message: 'No media available for this property' },
+        meta: { propref }
+      });
+    }
+    
+    // Resolve responsive images
+    const resolvedImages = await imageResolver.resolvePropertyImages(propref, property.details.media);
+    
+    const responseData = {
+      thumbnail: resolvedImages.thumbnail ? {
+        url: resolvedImages.thumbnail.thumbnailUrl,
+        srcsets: resolvedImages.thumbnail.responsiveMetadata?.srcsets,
+        aspectRatio: resolvedImages.thumbnail.responsiveMetadata?.aspectRatio,
+        dominantColor: resolvedImages.thumbnail.responsiveMetadata?.dominantColor,
+        placeholder: resolvedImages.thumbnail.responsiveMetadata?.placeholder
+      } : null,
+      photos: resolvedImages.photos.map(photo => ({
+        filename: photo.filename,
+        thumbnail: photo.thumbnailUrl,
+        srcsets: photo.responsiveMetadata?.srcsets,
+        aspectRatio: photo.responsiveMetadata?.aspectRatio,
+        dominantColor: photo.responsiveMetadata?.dominantColor,
+        placeholder: photo.responsiveMetadata?.placeholder,
+        optimized: !!photo.optimized
+      })),
+      floorplan: resolvedImages.floorplan ? {
+        filename: resolvedImages.floorplan.filename,
+        thumbnail: resolvedImages.floorplan.thumbnailUrl,
+        optimized: !!resolvedImages.floorplan.optimized
+      } : null,
+      epc: resolvedImages.epc ? {
+        filename: resolvedImages.epc.filename,
+        thumbnail: resolvedImages.epc.thumbnailUrl,
+        optimized: !!resolvedImages.epc.optimized
+      } : null,
+      totalImages: resolvedImages.photos.length,
+      optimizedCount: resolvedImages.photos.filter(p => p.optimized).length,
+    };
+    
+    // Cache for 1 hour
+    await cacheService.set(cacheKey, responseData, 3600);
+    
+    const responseTime = Date.now() - startTime;
+    
+    c.header('X-Cache-Status', 'MISS');
+    c.header('X-Response-Time', `${responseTime}ms`);
+    
+    return c.json({
+      success: true,
+      data: responseData,
+      meta: {
+        propref,
+        performance: { responseTime, cacheHit: false },
+        optimization: 'responsive-metadata'
+      }
+    });
+    
+  } catch (error) {
+    const responseTime = Date.now() - startTime;
+    c.header('X-Response-Time', `${responseTime}ms`);
+    
+    console.error(`[Properties] Get responsive images error:`, error);
+    
+    return c.json({
+      success: false,
+      error: 'Failed to fetch responsive images',
+      code: 'RESPONSIVE_IMAGES_ERROR',
       timestamp: new Date().toISOString(),
     }, 500);
   }

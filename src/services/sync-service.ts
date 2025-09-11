@@ -1,6 +1,7 @@
 import { rentmanClient } from '@/clients/rentman-client';
 import { databaseService } from '@/services/database';
 import { cacheService } from '@/cache/cache-service';
+import { imageResolver } from './image-resolver';
 
 export class SyncService {
   private isRunning = false;
@@ -84,8 +85,15 @@ export class SyncService {
       console.log('[SyncService] Upserting properties to SQLite...');
       await databaseService.upsertProperties(propertiesWithDetails);
 
+      // Process images for properties with media
+      console.log('[SyncService] Processing property images...');
+      await this.processPropertyImages(propertiesWithDetails);
+
       // Automatically set featured properties if none exist
       await this.autoSetFeaturedProperties(propertiesWithDetails);
+
+      // Process images for featured properties with priority
+      await this.processFeaturedPropertyImages();
 
       // Update sync metadata
       const syncDuration = Date.now() - startTime;
@@ -174,6 +182,16 @@ export class SyncService {
       await cacheService.invalidatePattern(`property:${propref}*`);
       await cacheService.invalidatePattern('properties:*');
       
+      // Process images for the synced property
+      if (property.media) {
+        try {
+          await this.processPropertyImages([property]);
+          console.log(`[SyncService] Processed images for property ${propref}`);
+        } catch (error) {
+          console.warn(`[SyncService] Failed to process images for property ${propref}:`, error);
+        }
+      }
+
       console.log(`[SyncService] Successfully synced property ${propref}`);
       return true;
     } catch (error) {
@@ -232,6 +250,52 @@ export class SyncService {
     } catch (error) {
       console.error('[SyncService] Featured properties migration failed:', error);
       return 0;
+    }
+  }
+
+  /**
+   * Process images for properties during sync
+   */
+  private async processPropertyImages(properties: any[]): Promise<void> {
+    try {
+      // Filter properties that have media
+      const propertiesWithMedia = properties
+        .filter(p => p.media)
+        .map(p => ({
+          propref: p.propref?.toString() || '',
+          media: typeof p.media === 'string' ? p.media : JSON.stringify(p.media)
+        }))
+        .filter(p => p.propref && p.media);
+
+      if (propertiesWithMedia.length === 0) {
+        console.log('[SyncService] No properties with media found for image processing');
+        return;
+      }
+
+      console.log(`[SyncService] Processing images for ${propertiesWithMedia.length} properties`);
+      
+      // Use the image resolver's batch processing
+      await imageResolver.preProcessPropertyImages(propertiesWithMedia);
+      
+      console.log('[SyncService] Image processing completed');
+    } catch (error) {
+      console.error('[SyncService] Failed to process property images:', error);
+    }
+  }
+
+  /**
+   * Process images for featured properties (priority processing)
+   */
+  private async processFeaturedPropertyImages(): Promise<void> {
+    try {
+      console.log('[SyncService] Processing images for featured properties...');
+      
+      // Pre-process images for better performance
+      await databaseService.preProcessImages(10); // Process top 10 featured properties
+      
+      console.log('[SyncService] Featured property image processing completed');
+    } catch (error) {
+      console.error('[SyncService] Failed to process featured property images:', error);
     }
   }
 
